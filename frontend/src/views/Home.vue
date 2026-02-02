@@ -143,7 +143,122 @@
           </a-row>
         </div>
 
-        <!-- 第三步:额外要求 -->
+        <!-- 第三步:预算设置 -->
+        <div class="form-section">
+          <div class="section-header">
+            <span class="section-icon">💰</span>
+            <span class="section-title">预算设置</span>
+            <span class="section-tip">(可选)</span>
+          </div>
+
+          <a-row :gutter="24">
+            <a-col :span="12">
+              <a-form-item name="max_budget">
+                <template #label>
+                  <span class="form-label">总预算</span>
+                  <span class="label-tip">（建议填写）</span>
+                </template>
+                <a-input-number
+                  v-model:value="formData.max_budget"
+                  :min="0"
+                  :max="100000"
+                  :step="100"
+                  placeholder="请输入总预算"
+                  size="large"
+                  style="width: 100%"
+                  class="custom-input"
+                >
+                  <template #addonAfter>元</template>
+                </a-input-number>
+                <div class="form-hint">
+                  💡 预算参考：经济游 500-1000元/天，舒适游 1000-2000元/天
+                </div>
+              </a-form-item>
+            </a-col>
+            <a-col :span="12">
+              <a-form-item name="budget_per_day">
+                <template #label>
+                  <span class="form-label">每日预算</span>
+                  <span class="label-tip">（不填则自动分配）</span>
+                </template>
+                <a-input-number
+                  v-model:value="formData.budget_per_day"
+                  :min="0"
+                  :max="10000"
+                  :step="50"
+                  placeholder="自动分配"
+                  size="large"
+                  style="width: 100%"
+                  class="custom-input"
+                >
+                  <template #addonAfter>元/天</template>
+                </a-input-number>
+              </a-form-item>
+            </a-col>
+          </a-row>
+        </div>
+
+        <!-- 第四步:时间设置 -->
+        <div class="form-section">
+          <div class="section-header">
+            <span class="section-icon">⏰</span>
+            <span class="section-title">时间安排</span>
+            <span class="section-tip">(可选)</span>
+          </div>
+
+          <a-row :gutter="24">
+            <a-col :span="8">
+              <a-form-item name="daily_start_time">
+                <template #label>
+                  <span class="form-label">每日开始时间</span>
+                </template>
+                <a-time-picker
+                  v-model:value="formData.daily_start_time"
+                  format="HH:mm"
+                  placeholder="选择时间"
+                  size="large"
+                  style="width: 100%"
+                  class="custom-input"
+                />
+              </a-form-item>
+            </a-col>
+            <a-col :span="8">
+              <a-form-item name="daily_end_time">
+                <template #label>
+                  <span class="form-label">每日结束时间</span>
+                </template>
+                <a-time-picker
+                  v-model:value="formData.daily_end_time"
+                  format="HH:mm"
+                  placeholder="选择时间"
+                  size="large"
+                  style="width: 100%"
+                  class="custom-input"
+                />
+              </a-form-item>
+            </a-col>
+            <a-col :span="8">
+              <a-form-item name="max_attractions_per_day">
+                <template #label>
+                  <span class="form-label">每天最多景点数</span>
+                </template>
+                <a-input-number
+                  v-model:value="formData.max_attractions_per_day"
+                  :min="1"
+                  :max="10"
+                  placeholder="4"
+                  size="large"
+                  style="width: 100%"
+                  class="custom-input"
+                >
+                  <template #addonAfter>个</template>
+                </a-input-number>
+              </a-form-item>
+            </a-col>
+          </a-row>
+        </div>
+
+        <!-- 第五步:额外要求 -->
         <div class="form-section">
           <div class="section-header">
             <span class="section-icon">💬</span>
@@ -224,7 +339,14 @@ const formData = reactive<TripFormData & { start_date: Dayjs | null; end_date: D
   transportation: '公共交通',
   accommodation: '经济型酒店',
   preferences: [],
-  free_text_input: ''
+  free_text_input: '',
+  // 预算字段
+  max_budget: undefined,
+  budget_per_day: undefined,
+  // 时间字段
+  daily_start_time: undefined,
+  daily_end_time: undefined,
+  max_attractions_per_day: undefined
 })
 
 // 监听日期变化,自动计算旅行天数
@@ -280,7 +402,14 @@ const handleSubmit = async () => {
       transportation: formData.transportation,
       accommodation: formData.accommodation,
       preferences: formData.preferences,
-      free_text_input: formData.free_text_input
+      free_text_input: formData.free_text_input,
+      // 预算字段
+      max_budget: formData.max_budget,
+      budget_per_day: formData.budget_per_day,
+      // 时间字段
+      daily_start_time: formData.daily_start_time ? formData.daily_start_time.format('HH:mm') : undefined,
+      daily_end_time: formData.daily_end_time ? formData.daily_end_time.format('HH:mm') : undefined,
+      max_attractions_per_day: formData.max_attractions_per_day
     }
 
     const response = await generateTripPlan(requestData)

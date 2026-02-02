@@ -378,6 +378,7 @@ def verify_plan_node(state: TripPlannerState) -> Dict[str, Any]:
         violations.append({
             "type": "missing_plan",
             "severity": "critical",
+            "fixable": False,  # 数据为空无法修复，需重新生成
             "message": "计划数据为空"
         })
         return {
@@ -394,6 +395,7 @@ def verify_plan_node(state: TripPlannerState) -> Dict[str, Any]:
                 "type": "missing_field",
                 "field": field,
                 "severity": "critical",
+                "fixable": field == "days",  # days 可以修复，其他关键字段不可修复
                 "message": f"缺少必需字段: {field}"
             })
     
@@ -403,6 +405,7 @@ def verify_plan_node(state: TripPlannerState) -> Dict[str, Any]:
         violations.append({
             "type": "days_mismatch",
             "severity": "critical",
+            "fixable": True,  # 天数不匹配可以修复
             "message": f"计划天数 {len(days)} 与请求天数 {request.travel_days} 不匹配",
             "expected": request.travel_days,
             "actual": len(days)
@@ -438,6 +441,8 @@ def verify_plan_node(state: TripPlannerState) -> Dict[str, Any]:
         for j, attraction in enumerate(attractions):
             if "name" not in attraction:
                 day_violations.append(f"景点{j+1}缺少名称")
+            if "description" not in attraction:
+                day_violations.append(f"景点{j+1}缺少描述信息")
             if "location" not in attraction:
                 day_violations.append(f"景点{j+1}缺少位置信息")
             elif "longitude" not in attraction["location"] or "latitude" not in attraction["location"]:
@@ -448,6 +453,7 @@ def verify_plan_node(state: TripPlannerState) -> Dict[str, Any]:
                 "type": "day_incomplete",
                 "day_index": i,
                 "severity": "high",
+                "fixable": True,  # 每日行程不完整可以修复
                 "message": f"第{i+1}天行程不完整",
                 "details": day_violations
             })
@@ -457,6 +463,7 @@ def verify_plan_node(state: TripPlannerState) -> Dict[str, Any]:
         violations.append({
             "type": "missing_budget",
             "severity": "medium",
+            "fixable": True,  # 预算信息可以补充
             "message": "缺少预算信息"
         })
     
@@ -466,20 +473,18 @@ def verify_plan_node(state: TripPlannerState) -> Dict[str, Any]:
             print(f"   - [{v['severity']}] {v['message']}")
         return {
             "violations": violations,
-            "verify_count": state.get("verify_count", 0) + 1,
             "current_step": "verify_failed"
         }
     else:
         print("✓ 校验通过，计划完整")
         return {
             "violations": None,
-            "verify_count": state.get("verify_count", 0) + 1,
             "current_step": "verify_passed"
         }
 
 
 def fix_plan_node(state: TripPlannerState) -> Dict[str, Any]:
-    """修复节点：根据校验问题修复计划"""
+    """修复节点：根据校验问题精准修复计划"""
     print("🔧 正在修复行程计划...")
     
     violations = state.get("violations", [])
@@ -487,37 +492,65 @@ def fix_plan_node(state: TripPlannerState) -> Dict[str, Any]:
     request = state["request"]
     llm = create_llm()
     
-    # 构建问题清单
-    issues_text = "\n".join([
-        f"- [{v['severity']}] {v['message']}" + 
-        (f"\n  详情: {', '.join(v['details'])}" if 'details' in v else "")
-        for v in violations
-    ])
+    # 只提取可修复的 critical 或 high 级别问题
+    fixable_issues = [
+        v for v in violations 
+        if v.get("severity") in ["critical", "high"] and v.get("fixable", True)
+    ]
     
-    # 构建修复提示词
-    system_prompt = f"""你是行程规划修复专家。当前计划存在以下问题，请针对性修复：
+    # 如果没有可修复问题，直接返回原计划
+    if not fixable_issues:
+        print("⚠️  没有可修复的问题，保持原计划")
+        return {
+            "final_plan_raw": json.dumps(final_plan, ensure_ascii=False),
+            "current_step": "plan_fixed"
+        }
+    
+    # 构建精准的修复指令，包含详细错误
+    issues_text = []
+    for i, v in enumerate(fixable_issues):
+        issue_line = f"{i+1}. {v['message']}"
+        
+        # 添加期望值和实际值
+        if 'expected' in v:
+            issue_line += f" (期望: {v.get('expected')}, 实际: {v.get('actual')})"
+        
+        # 添加详细错误列表
+        if 'details' in v and v['details']:
+            issue_line += "\n   详细问题:"
+            for detail in v['details']:
+                issue_line += f"\n   - {detail}"
+        
+        issues_text.append(issue_line)
+    
+    issues_text = "\n".join(issues_text)
+    
+    # 构建修复提示词 - 更精简和精准
+    system_prompt = f"""你是行程修复专家。请针对以下 {len(fixable_issues)} 个具体问题进行精准修复：
 
-**问题清单:**
+**需要修复的问题：**
 {issues_text}
 
-**修复要求:**
-1. 保留计划中正确的部分
-2. 只修复有问题的部分
-3. 确保修复后符合原始需求
-4. 返回完整的修复后的 JSON 计划
+**修复规则：**
+1. 只修复列出的问题（特别注意补充缺失的字段）
+2. 保持其他部分完全不变
+3. 景点必须包含：name, description, location(含longitude/latitude), visit_duration, address
+4. 如果是天数问题，增加或减少相应天数的行程
+5. 确保修复后的计划完整有效
+6. 返回完整 JSON（不要省略任何部分）
 
-**原始需求:**
+**原始需求回顾：**
 - 城市: {request.city}
 - 天数: {request.travel_days}天
 - 日期: {request.start_date} 至 {request.end_date}
 - 偏好: {', '.join(request.preferences) if request.preferences else '无'}
 
-返回格式必须是完整的 JSON:
+返回完整的修复后 JSON:
 ```json
 {{
   "city": "...",
-  "start_date": "YYYY-MM-DD",
-  "end_date": "YYYY-MM-DD",
+  "start_date": "...",
+  "end_date": "...",
   "days": [...],
   "weather_info": [...],
   "overall_suggestions": "...",
@@ -541,6 +574,7 @@ def fix_plan_node(state: TripPlannerState) -> Dict[str, Any]:
     
     return {
         "final_plan_raw": fixed_plan_raw,
+        "verify_count": state.get("verify_count", 0) + 1,  # 修复后增加计数
         "current_step": "plan_fixed"
     }
 
@@ -561,27 +595,55 @@ def should_retry_parse(state: TripPlannerState) -> Literal["parse_plan", "error_
 
 
 def should_fix_or_end(state: TripPlannerState) -> Literal["fix_plan", "END"]:
-    """根据校验结果决定是修复还是结束"""
+    """根据校验结果智能决定是修复还是结束"""
     violations = state.get("violations")
     verify_count = state.get("verify_count", 0)
-    MAX_VERIFY_ATTEMPTS = 3
+    MAX_VERIFY_ATTEMPTS = 2  # 最多修复2次（初次验证+1次修复后验证）
     
-    # 如果没有问题，结束流程
+    print(f"🔍 [DEBUG] violations={violations is not None}, verify_count={verify_count}")
+    
+    # 策略1: 无问题直接结束
     if not violations:
         print("✅ 校验通过，流程结束")
         return "END"
     
-    # 如果已达最大重试次数，强制结束
+    print(f"🔍 [DEBUG] violations数量: {len(violations)}")
+    
+    # 策略2: 检查是否有不可修复的问题
+    unfixable = [v for v in violations if not v.get("fixable", True)]
+    if unfixable:
+        print(f"⚠️  发现 {len(unfixable)} 个不可修复问题，放弃修复")
+        for v in unfixable:
+            print(f"   - {v['message']}")
+        return "END"
+    
+    # 策略3: 限制修复次数
     if verify_count >= MAX_VERIFY_ATTEMPTS:
-        print(f"⚠️  已达最大校验次数 ({MAX_VERIFY_ATTEMPTS})，接受当前结果")
+        print(f"⚠️  已尝试修复 {verify_count} 次，接受当前结果")
         return "END"
     
-    # 检查问题严重程度
-    critical_count = sum(1 for v in violations if v.get("severity") == "critical")
+    # 策略4: 只修复 critical 或 high 级别且 fixable 的问题
+    fixable_important = [
+        v for v in violations 
+        if v.get("severity") in ["critical", "high"] and v.get("fixable", True)
+    ]
     
-    if critical_count > 0:
-        print(f"🔧 发现 {critical_count} 个严重问题，进入修复流程")
+    print(f"🔍 [DEBUG] fixable_important数量: {len(fixable_important)}")
+    for v in fixable_important:
+        print(f"   - severity={v.get('severity')}, fixable={v.get('fixable')}, msg={v.get('message')}")
+    
+    # 策略5: 问题太多，放弃修复
+    if len(fixable_important) > 3:
+        print(f"⚠️  可修复问题过多({len(fixable_important)}个)，接受当前结果")
+        return "END"
+    
+    # 策略6: 有少量可修复的重要问题，尝试修复
+    if len(fixable_important) > 0:
+        print(f"🔧 发现 {len(fixable_important)} 个可修复的重要问题，尝试修复")
+        for v in fixable_important:
+            print(f"   - {v['message']}")
         return "fix_plan"
-    else:
-        print(f"⚠️  仅有轻微问题，接受当前结果")
-        return "END"
+    
+    # 策略7: 只有 medium/low 级别的问题，直接接受
+    print(f"⚠️  仅有轻微问题({len(violations)}个)，接受当前结果")
+    return "END"

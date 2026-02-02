@@ -85,6 +85,13 @@ export interface TripFormData {
   accommodation: string
   preferences: string[]
   free_text_input: string
+  // 预算字段
+  max_budget?: number
+  budget_per_day?: number
+  // 时间字段
+  daily_start_time?: string
+  daily_end_time?: string
+  max_attractions_per_day?: number
 }
 
 export interface TripPlanResponse {

@@ -20,8 +20,7 @@ class TripPlannerState(TypedDict):
     final_plan: Optional[Dict[str, Any]]       #parse解析后的结果
 
     #加入verify回环
-
-    vialations: Optional[list[Dict[str,Any]]]
+    violations: Optional[list[Dict[str,Any]]]  # 修复拼写错误
     verify_count: int
     parse_retry_count: int
     

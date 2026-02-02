@@ -35,8 +35,8 @@ class Settings(BaseSettings):
     amap_api_key: str = ""
 
     # Unsplash API配置
-    unsplash_access_key: str = ""
-    unsplash_secret_key: str = ""
+    unsplash_access_key: str = "6JfoHLkV1QYshx8HlnCADQ6oHHRODE2DrVxxD6-Mc2o"
+    unsplash_secret_key: str = "8JwGa1f56LCKARIrbfgpMbFjz9Sd1diaEDSmuXXRxTo"
 
     # LLM配置 (从环境变量读取,由HelloAgents管理)
     openai_api_key: str = ""
@@ -45,6 +45,11 @@ class Settings(BaseSettings):
 
     # 日志配置
     log_level: str = "INFO"
+    
+    # LangGraph 工作流配置
+    enable_verify_loop: bool = True  # 是否启用验证回环
+    enable_fix_loop: bool = False  # 是否启用修复回环（设为 False 提升速度）
+    max_verify_attempts: int = 1  # 最大验证次数（降低以提升速度）
 
     class Config:
         env_file = ".env"
