@@ -581,8 +581,13 @@ def fix_plan_node(state: TripPlannerState) -> Dict[str, Any]:
 
 # ==================== 条件路由函数 ====================
 
-def should_retry_parse(state: TripPlannerState) -> Literal["parse_plan", "error_handler"]:
-    """决定是否重试解析"""
+def should_retry_parse(state: TripPlannerState) -> Literal["verify_plan", "parse_plan", "error_handler"]:
+    """决定解析后的下一步：成功→验证，失败→重试或错误处理"""
+    # 解析成功，进入验证
+    if state.get("current_step") == "plan_parsed":
+        return "verify_plan"
+    
+    # 解析失败，检查是否可以重试
     parse_retry_count = state.get("parse_retry_count", 0)
     MAX_PARSE_RETRIES = 3
     
@@ -590,7 +595,7 @@ def should_retry_parse(state: TripPlannerState) -> Literal["parse_plan", "error_
         print(f"❌ 解析重试次数已达上限 ({MAX_PARSE_RETRIES}), 进入错误处理")
         return "error_handler"
     
-    print(f"🔄 重新尝试解析 (第 {parse_retry_count + 1} 次)")
+    print(f"🔄 重新尝试解析 (第 {parse_retry_count} 次/{MAX_PARSE_RETRIES})")
     return "parse_plan"
 
 

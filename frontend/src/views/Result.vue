@@ -46,6 +46,12 @@
             <a-menu-item key="budget" v-if="tripPlan.budget">
               <span>💰 预算明细</span>
             </a-menu-item>
+            <a-menu-item key="budget-usage" v-if="tripPlan.budget_usage">
+              <span>📊 预算使用</span>
+            </a-menu-item>
+            <a-menu-item key="conflicts" v-if="(tripPlan.time_conflicts && tripPlan.time_conflicts.length > 0) || (tripPlan.warnings && tripPlan.warnings.length > 0)">
+              <span>⚠️ 风险提醒</span>
+            </a-menu-item>
             <a-menu-item key="map">
               <span>📍 景点地图</span>
             </a-menu-item>
@@ -106,6 +112,25 @@
                 <span class="total-value">¥{{ tripPlan.budget.total }}</span>
               </div>
             </a-card>
+
+            <a-card id="budget-usage" v-if="tripPlan.budget_usage" title="📊 预算使用" :bordered="false" class="budget-card">
+              <a-progress
+                :percent="getBudgetUsagePercent()"
+                :status="tripPlan.budget_usage.over_budget ? 'exception' : 'active'"
+                style="margin-bottom: 16px"
+              />
+
+              <a-descriptions :column="1" size="small" bordered>
+                <a-descriptions-item label="总预算">¥{{ tripPlan.budget_usage.total_budget }}</a-descriptions-item>
+                <a-descriptions-item label="已使用">¥{{ tripPlan.budget_usage.used_budget }}</a-descriptions-item>
+                <a-descriptions-item label="剩余">¥{{ tripPlan.budget_usage.remaining_budget }}</a-descriptions-item>
+                <a-descriptions-item label="是否超预算">
+                  <a-tag :color="tripPlan.budget_usage.over_budget ? 'red' : 'green'">
+                    {{ tripPlan.budget_usage.over_budget ? `超出 ¥${tripPlan.budget_usage.over_budget_amount}` : '未超预算' }}
+                  </a-tag>
+                </a-descriptions-item>
+              </a-descriptions>
+            </a-card>
           </div>
 
           <!-- 右侧:地图 -->
@@ -115,6 +140,43 @@
             </a-card>
           </div>
         </div>
+
+        <a-card
+          id="conflicts"
+          v-if="(tripPlan.time_conflicts && tripPlan.time_conflicts.length > 0) || (tripPlan.warnings && tripPlan.warnings.length > 0)"
+          title="⚠️ 风险提醒"
+          :bordered="false"
+          style="margin-bottom: 20px"
+        >
+          <a-alert
+            v-for="(warning, index) in tripPlan.warnings || []"
+            :key="`warning-${index}`"
+            :message="warning"
+            type="warning"
+            show-icon
+            style="margin-bottom: 10px"
+          />
+
+          <a-list
+            v-if="tripPlan.time_conflicts && tripPlan.time_conflicts.length > 0"
+            :data-source="tripPlan.time_conflicts"
+            size="small"
+            bordered
+          >
+            <template #renderItem="{ item }">
+              <a-list-item>
+                <a-space direction="vertical" size="small" style="width: 100%">
+                  <a-space>
+                    <a-tag :color="getConflictTagColor(item.severity)">{{ item.severity }}</a-tag>
+                    <a-tag color="blue">{{ item.conflict_type }}</a-tag>
+                    <span v-if="item.day_index !== null && item.day_index !== undefined">第{{ item.day_index + 1 }}天</span>
+                  </a-space>
+                  <span>{{ item.description }}</span>
+                </a-space>
+              </a-list-item>
+            </template>
+          </a-list>
+        </a-card>
 
         <!-- 每日行程:可折叠 -->
         <a-card title="📅 每日行程" :bordered="false" class="days-card">
@@ -145,7 +207,24 @@
                   <span class="label">🏨 住宿:</span>
                   <span class="value">{{ day.accommodation }}</span>
                 </div>
+                <div class="info-row" v-if="day.total_cost !== undefined">
+                  <span class="label">💰 当日预算:</span>
+                  <span class="value">¥{{ day.total_cost }}</span>
+                </div>
+                <div class="info-row" v-if="day.total_duration !== undefined">
+                  <span class="label">⏱️ 当日时长:</span>
+                  <span class="value">{{ day.total_duration }} 分钟</span>
+                </div>
               </div>
+
+              <a-divider v-if="day.timeline && day.timeline.length > 0" orientation="left">🕐 时间线</a-divider>
+              <a-timeline v-if="day.timeline && day.timeline.length > 0">
+                <a-timeline-item v-for="(timelineItem, timelineIndex) in day.timeline" :key="`timeline-${day.day_index}-${timelineIndex}`">
+                  <strong>{{ timelineItem.start_time }} - {{ timelineItem.end_time }}</strong>
+                  <span> · {{ timelineItem.activity_name }} ({{ timelineItem.duration }}分钟)</span>
+                  <span v-if="timelineItem.cost && timelineItem.cost > 0"> · ¥{{ timelineItem.cost }}</span>
+                </a-timeline-item>
+              </a-timeline>
 
               <!-- 景点安排 -->
               <a-divider orientation="left">🎯 景点安排</a-divider>
@@ -315,6 +394,7 @@ import { DownOutlined } from '@ant-design/icons-vue'
 import AMapLoader from '@amap/amap-jsapi-loader'
 import html2canvas from 'html2canvas'
 import jsPDF from 'jspdf'
+import { API_BASE_URL } from '@/services/api'
 import type { TripPlan } from '@/types'
 
 const router = useRouter()
@@ -424,6 +504,19 @@ const getMealLabel = (type: string): string => {
   return labels[type] || type
 }
 
+const getBudgetUsagePercent = (): number => {
+  if (!tripPlan.value?.budget_usage) return 0
+  const { total_budget, used_budget } = tripPlan.value.budget_usage
+  if (!total_budget || total_budget <= 0) return 0
+  return Math.min(100, Math.round((used_budget / total_budget) * 100))
+}
+
+const getConflictTagColor = (severity: string): string => {
+  if (severity === 'critical') return 'red'
+  if (severity === 'warning') return 'orange'
+  return 'blue'
+}
+
 // 加载所有景点图片
 const loadAttractionPhotos = async () => {
   if (!tripPlan.value) return
@@ -432,7 +525,7 @@ const loadAttractionPhotos = async () => {
 
   tripPlan.value.days.forEach(day => {
     day.attractions.forEach(attraction => {
-      const promise = fetch(`http://localhost:8000/api/poi/photo?name=${encodeURIComponent(attraction.name)}`)
+      const promise = fetch(`${API_BASE_URL}/api/poi/photo?name=${encodeURIComponent(attraction.name)}`)
         .then(res => res.json())
         .then(data => {
           if (data.success && data.data.photo_url) {

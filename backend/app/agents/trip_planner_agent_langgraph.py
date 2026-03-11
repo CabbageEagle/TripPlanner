@@ -51,10 +51,15 @@ class LangGraphTripPlanner:
         # 验证回环阶段
         workflow.add_edge("plan_trip", "parse_plan")
         
-        # 条件边：解析失败可能重试或进入错误处理
+        # 条件边：解析成功进入验证，失败则重试或进入错误处理
         workflow.add_conditional_edges(
             "parse_plan",
-            lambda state: "verify_plan" if state.get("current_step") == "plan_parsed" else "error_handler"
+            should_retry_parse,
+            {
+                "verify_plan": "verify_plan",
+                "parse_plan": "parse_plan",
+                "error_handler": "error_handler"
+            }
         )
         
         # 条件边：验证失败则修复，通过则结束

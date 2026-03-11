@@ -1,5 +1,6 @@
 """旅行规划API路由"""
 
+import asyncio
 from fastapi import APIRouter, HTTPException
 from ...models.schemas import (
     TripRequest,
@@ -40,9 +41,9 @@ async def plan_trip(request: TripRequest):
         print("🔄 获取 LangGraph 系统实例...")
         agent = get_trip_planner_agent()
 
-        # 生成旅行计划
+        # 生成旅行计划（在线程池中运行，避免阻塞事件循环）
         print("🚀 开始 LangGraph 工作流...")
-        trip_plan = agent.plan_trip(request)
+        trip_plan = await asyncio.to_thread(agent.plan_trip, request)
 
         print("✅ 旅行计划生成成功,准备返回响应\n")
 
@@ -76,8 +77,8 @@ async def health_check():
         return {
             "status": "healthy",
             "service": "trip-planner",
-            "agent_name": agent.agent.name,
-            "tools_count": len(agent.agent.list_tools())
+            "engine": "LangGraph",
+            "graph_compiled": agent.app is not None
         }
     except Exception as e:
         raise HTTPException(

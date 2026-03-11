@@ -54,16 +54,46 @@ export interface DayPlan {
   hotel?: Hotel
   attractions: Attraction[]
   meals: Meal[]
+  total_cost?: number
+  total_duration?: number
+  timeline?: TimelineItem[]
 }
 
 export interface WeatherInfo {
   date: string
   day_weather: string
   night_weather: string
-  day_temp: number
-  night_temp: number
+  day_temp: number | string
+  night_temp: number | string
   wind_direction: string
   wind_power: string
+}
+
+export interface TimelineItem {
+  start_time: string
+  end_time: string
+  activity_type: string
+  activity_name: string
+  duration: number
+  location?: Location
+  cost?: number
+}
+
+export interface Conflict {
+  conflict_type: 'time' | 'budget' | 'capacity' | string
+  severity: 'critical' | 'warning' | 'info' | string
+  description: string
+  affected_items: string[]
+  day_index?: number | null
+}
+
+export interface BudgetUsage {
+  total_budget: number
+  used_budget: number
+  remaining_budget: number
+  breakdown: Record<string, number>
+  over_budget: boolean
+  over_budget_amount: number
 }
 
 export interface TripPlan {
@@ -74,6 +104,9 @@ export interface TripPlan {
   weather_info: WeatherInfo[]
   overall_suggestions: string
   budget?: Budget
+  budget_usage?: BudgetUsage
+  time_conflicts?: Conflict[]
+  warnings?: string[]
 }
 
 export interface TripFormData {
