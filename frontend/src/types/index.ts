@@ -1,4 +1,4 @@
-// 类型定义
+﻿// 绫诲瀷瀹氫箟
 
 export interface Location {
   longitude: number
@@ -118,10 +118,10 @@ export interface TripFormData {
   accommodation: string
   preferences: string[]
   free_text_input: string
-  // 预算字段
+  // 棰勭畻瀛楁
   max_budget?: number
   budget_per_day?: number
-  // 时间字段
+  // 鏃堕棿瀛楁
   daily_start_time?: string
   daily_end_time?: string
   max_attractions_per_day?: number
@@ -130,6 +130,13 @@ export interface TripFormData {
 export interface TripPlanResponse {
   success: boolean
   message: string
+  plan_id?: string
   data?: TripPlan
 }
+
+export interface TripPlanUpdateRequest {
+  data: TripPlan
+  note?: string
+}
+
 

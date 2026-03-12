@@ -30,3 +30,9 @@ uv>=0.8.0
 # 其他工具
 python-dateutil>=2.8.2
 huggingface_hub>=0.25.0
+
+# 数据库相关
+sqlalchemy>=2.0.36
+psycopg[binary]>=3.2.3
+alembic>=1.14.0
+pgvector>=0.3.6

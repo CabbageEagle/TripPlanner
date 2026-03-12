@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="home-container">
     <!-- 背景装饰 -->
     <div class="bg-decoration">
@@ -326,12 +326,31 @@ import { generateTripPlan } from '@/services/api'
 import type { TripFormData } from '@/types'
 import type { Dayjs } from 'dayjs'
 
+const TRIP_PLAN_STORAGE_KEY = 'tripPlan'
+const TRIP_PLAN_ID_STORAGE_KEY = 'tripPlanId'
+
+interface HomeFormState {
+  city: string
+  start_date: Dayjs | null
+  end_date: Dayjs | null
+  travel_days: number
+  transportation: string
+  accommodation: string
+  preferences: string[]
+  free_text_input: string
+  max_budget?: number
+  budget_per_day?: number
+  daily_start_time?: Dayjs | null
+  daily_end_time?: Dayjs | null
+  max_attractions_per_day?: number
+}
+
 const router = useRouter()
 const loading = ref(false)
 const loadingProgress = ref(0)
 const loadingStatus = ref('')
 
-const formData = reactive<TripFormData & { start_date: Dayjs | null; end_date: Dayjs | null }>({
+const formData = reactive<HomeFormState>({
   city: '',
   start_date: null,
   end_date: null,
@@ -340,16 +359,13 @@ const formData = reactive<TripFormData & { start_date: Dayjs | null; end_date: D
   accommodation: '经济型酒店',
   preferences: [],
   free_text_input: '',
-  // 预算字段
   max_budget: undefined,
   budget_per_day: undefined,
-  // 时间字段
   daily_start_time: undefined,
   daily_end_time: undefined,
   max_attractions_per_day: undefined
 })
 
-// 监听日期变化,自动计算旅行天数
 watch([() => formData.start_date, () => formData.end_date], ([start, end]) => {
   if (start && end) {
     const days = end.diff(start, 'day') + 1
@@ -375,20 +391,18 @@ const handleSubmit = async () => {
   loadingProgress.value = 0
   loadingStatus.value = '正在初始化...'
 
-  // 模拟进度更新
   const progressInterval = setInterval(() => {
     if (loadingProgress.value < 90) {
       loadingProgress.value += 10
 
-      // 更新状态文本
       if (loadingProgress.value <= 30) {
-        loadingStatus.value = '🔍 正在搜索景点...'
+        loadingStatus.value = '正在搜索景点...'
       } else if (loadingProgress.value <= 50) {
-        loadingStatus.value = '🌤️ 正在查询天气...'
+        loadingStatus.value = '正在查询天气...'
       } else if (loadingProgress.value <= 70) {
-        loadingStatus.value = '🏨 正在推荐酒店...'
+        loadingStatus.value = '正在推荐酒店...'
       } else {
-        loadingStatus.value = '📋 正在生成行程计划...'
+        loadingStatus.value = '正在生成行程计划...'
       }
     }
   }, 500)
@@ -403,10 +417,8 @@ const handleSubmit = async () => {
       accommodation: formData.accommodation,
       preferences: formData.preferences,
       free_text_input: formData.free_text_input,
-      // 预算字段
       max_budget: formData.max_budget,
       budget_per_day: formData.budget_per_day,
-      // 时间字段
       daily_start_time: formData.daily_start_time ? formData.daily_start_time.format('HH:mm') : undefined,
       daily_end_time: formData.daily_end_time ? formData.daily_end_time.format('HH:mm') : undefined,
       max_attractions_per_day: formData.max_attractions_per_day
@@ -416,24 +428,30 @@ const handleSubmit = async () => {
 
     clearInterval(progressInterval)
     loadingProgress.value = 100
-    loadingStatus.value = '✅ 完成!'
+    loadingStatus.value = '完成!'
 
     if (response.success && response.data) {
-      // 保存到sessionStorage
-      sessionStorage.setItem('tripPlan', JSON.stringify(response.data))
+      sessionStorage.setItem(TRIP_PLAN_STORAGE_KEY, JSON.stringify(response.data))
+      if (response.plan_id) {
+        sessionStorage.setItem(TRIP_PLAN_ID_STORAGE_KEY, response.plan_id)
+      } else {
+        sessionStorage.removeItem(TRIP_PLAN_ID_STORAGE_KEY)
+      }
 
       message.success('旅行计划生成成功!')
 
-      // 短暂延迟后跳转
       setTimeout(() => {
-        router.push('/result')
+        router.push({
+          path: '/result',
+          query: response.plan_id ? { planId: response.plan_id } : undefined
+        })
       }, 500)
     } else {
       message.error(response.message || '生成失败')
     }
   } catch (error: any) {
     clearInterval(progressInterval)
-    message.error(error.message || '生成旅行计划失败,请稍后重试')
+    message.error(error.message || '生成旅行计划失败，请稍后重试')
   } finally {
     setTimeout(() => {
       loading.value = false
@@ -775,4 +793,3 @@ const handleSubmit = async () => {
   }
 }
 </style>
-
