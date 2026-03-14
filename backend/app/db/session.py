@@ -1,6 +1,7 @@
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from pgvector.psycopg import register_vector
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..config import get_settings
@@ -13,6 +14,12 @@ engine = create_engine(
     echo=settings.database_echo,
     future=True,
 )
+
+
+@event.listens_for(engine, "connect")
+def register_pgvector(dbapi_connection, connection_record) -> None:  # type: ignore[no-untyped-def]
+    del connection_record
+    register_vector(dbapi_connection)
 
 SessionLocal = sessionmaker(
     bind=engine,

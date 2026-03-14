@@ -14,6 +14,7 @@ class TripPlannerState(TypedDict):
     attractions_data: Optional[str]
     weather_data: Optional[str]
     hotel_data: Optional[str]
+    inferred_preferences: Optional[str]
     
     # 最终输出
     final_plan_raw: Optional[str]               #模型原始输出

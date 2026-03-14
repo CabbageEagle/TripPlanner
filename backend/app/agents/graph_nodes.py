@@ -190,6 +190,7 @@ def plan_trip_node(state: TripPlannerState) -> Dict[str, Any]:
     attractions_data = state.get("attractions_data", "")
     weather_data = state.get("weather_data", "")
     hotel_data = state.get("hotel_data", "")
+    inferred_preferences = state.get("inferred_preferences", "")
     
     llm = create_llm()
     
@@ -268,6 +269,9 @@ def plan_trip_node(state: TripPlannerState) -> Dict[str, Any]:
 **酒店信息:**
 {hotel_data}
 """
+
+    if inferred_preferences:
+        user_query += f"\n\n**历史偏好摘要（仅供参考，本次明确输入优先）:**\n{inferred_preferences}"
     
     if request.free_text_input:
         user_query += f"\n**额外要求:** {request.free_text_input}"

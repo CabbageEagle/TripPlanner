@@ -84,7 +84,7 @@ class LangGraphTripPlanner:
         print("✅ LangGraph 旅行规划系统初始化成功")
         print("   流程: 数据收集 -> 规划 -> 解析 -> 校验 -> [修复回环] -> 结束")
     
-    def plan_trip(self, request: TripRequest) -> TripPlan:
+    def plan_trip(self, request: TripRequest, inferred_preferences: str | None = None) -> TripPlan:
         """
         使用 LangGraph 生成旅行计划
         
@@ -109,6 +109,7 @@ class LangGraphTripPlanner:
                 "attractions_data": None,
                 "weather_data": None,
                 "hotel_data": None,
+                "inferred_preferences": inferred_preferences,
                 "final_plan_raw": None,
                 "final_plan": None,
                 "violations": None,

@@ -10,6 +10,10 @@ from pydantic_settings import BaseSettings
 
 load_dotenv()
 
+backend_env = Path(__file__).parent.parent.parent / ".env"
+if backend_env.exists():
+    load_dotenv(backend_env, override=False)
+
 helloagents_env = Path(__file__).parent.parent.parent.parent / "HelloAgents" / ".env"
 if helloagents_env.exists():
     load_dotenv(helloagents_env, override=False)
@@ -35,6 +39,8 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4"
+    openai_embedding_model: str = "text-embedding-3-small"
+    rag_debug: bool = False
 
     log_level: str = "INFO"
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/trip_planner"

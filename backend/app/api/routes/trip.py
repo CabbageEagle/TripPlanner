@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ...agents.trip_planner_agent_langgraph import get_trip_planner_agent
+from ...config import get_settings
 from ...db.session import get_db
 from ...models.schemas import TripPlan, TripPlanResponse, TripPlanUpdateRequest, TripRequest
 from ...repositories.trip_repository import (
@@ -16,12 +17,25 @@ from ...repositories.trip_repository import (
     get_trip_plan,
     save_new_trip_plan_version,
 )
+from ...services.memory_service import (
+    extract_memories_from_edit,
+    extract_memories_from_request,
+    persist_memories,
+    retrieve_relevant_memories,
+    summarize_preferences,
+)
 
 router = APIRouter(prefix="/trip", tags=["旅行规划"])
+settings = get_settings()
 
 
 def _parse_iso_date(value: str) -> date:
     return date.fromisoformat(value)
+
+
+def _rag_debug_log(message: str) -> None:
+    if settings.rag_debug:
+        print(f"[RAG_DEBUG] {message}")
 
 
 @router.post(
@@ -40,8 +54,28 @@ async def plan_trip(request: TripRequest, db: Session = Depends(get_db)):
         print(f"   天数: {request.travel_days}")
         print(f"{'='*60}\n")
 
+        retrieved_memories = retrieve_relevant_memories(db, request=request, limit=5)
+        inferred_preferences = summarize_preferences(retrieved_memories)
+        
+        if settings.rag_debug:
+            _rag_debug_log(f"retrieved_memories_count={len(retrieved_memories)}")
+            for index, memory in enumerate(retrieved_memories, start=1):
+                signal = ""
+                if isinstance(memory.meta, dict):
+                    signal = str(memory.meta.get("signal", ""))
+                content = memory.content.replace("\n", " ").strip()
+                if len(content) > 120:
+                    content = f"{content[:117]}..."
+                _rag_debug_log(
+                    f"retrieved[{index}] type={memory.memory_type} signal={signal or '-'} content={content}"
+                )
+            _rag_debug_log(
+                "inferred_preferences="
+                + (inferred_preferences.replace("\n", " | ") if inferred_preferences else "<empty>")
+            )
+
         agent = get_trip_planner_agent()
-        trip_plan = await asyncio.to_thread(agent.plan_trip, request)
+        trip_plan = await asyncio.to_thread(agent.plan_trip, request, inferred_preferences)
         plan_payload = trip_plan.model_dump()
         request_payload = request.model_dump()
 
@@ -61,6 +95,20 @@ async def plan_trip(request: TripRequest, db: Session = Depends(get_db)):
             source="generated",
             plan_payload=plan_payload,
         )
+        request_memories = extract_memories_from_request(request)
+        if settings.rag_debug:
+            _rag_debug_log(f"request_memories_count={len(request_memories)}")
+            for index, memory in enumerate(request_memories, start=1):
+                signal = str(memory.metadata.get("signal", "-"))
+                _rag_debug_log(
+                    f"request_memory[{index}] type={memory.memory_type} signal={signal} content={memory.content}"
+                )
+        persisted_request_memories = persist_memories(
+            db,
+            memories=request_memories,
+            source_trip_plan_id=trip_record.id,
+        )
+        _rag_debug_log(f"persisted_request_memories={len(persisted_request_memories)}")
         db.commit()
 
         return TripPlanResponse(
@@ -135,6 +183,7 @@ async def update_trip(plan_id: UUID, request: TripPlanUpdateRequest, db: Session
         if trip_record is None:
             raise HTTPException(status_code=404, detail="旅行计划不存在")
 
+        previous_plan = TripPlan(**trip_record.current_plan_payload)
         updated_payload = request.data.model_dump()
         save_new_trip_plan_version(
             db,
@@ -144,6 +193,20 @@ async def update_trip(plan_id: UUID, request: TripPlanUpdateRequest, db: Session
             note=request.note,
             status="edited",
         )
+        edit_memories = extract_memories_from_edit(previous_plan, request.data, note=request.note)
+        if settings.rag_debug:
+            _rag_debug_log(f"edit_memories_count={len(edit_memories)}")
+            for index, memory in enumerate(edit_memories, start=1):
+                signal = str(memory.metadata.get("signal", "-"))
+                _rag_debug_log(
+                    f"edit_memory[{index}] type={memory.memory_type} signal={signal} content={memory.content}"
+                )
+        persisted_edit_memories = persist_memories(
+            db,
+            memories=edit_memories,
+            source_trip_plan_id=plan_id,
+        )
+        _rag_debug_log(f"persisted_edit_memories={len(persisted_edit_memories)}")
         db.commit()
 
         return TripPlanResponse(
