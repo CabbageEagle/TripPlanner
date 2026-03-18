@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
@@ -24,12 +23,11 @@ class TripPlanRecord(Base):
     request_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     current_plan_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="generated", server_default="generated")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
     versions: Mapped[list["TripPlanVersion"]] = relationship(
@@ -39,7 +37,9 @@ class TripPlanRecord(Base):
     )
     memory_items: Mapped[list["MemoryItem"]] = relationship(back_populates="source_trip_plan")
 
-    __table_args__ = (Index("idx_trip_plans_created_at", "created_at"),)
+    __table_args__ = (
+        Index("idx_trip_plans_created_at", "created_at"),
+    )
 
 
 class TripPlanVersion(Base):
@@ -55,7 +55,9 @@ class TripPlanVersion(Base):
     source: Mapped[str] = mapped_column(Text, nullable=False)
     plan_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
     trip_plan: Mapped["TripPlanRecord"] = relationship(back_populates="versions")
 
@@ -76,9 +78,12 @@ class MemoryItem(Base):
         ForeignKey("trip_plans.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # 注意：SQLAlchemy 的 `metadata` 是保留属性名，这里用 meta 映射到数据库列 metadata
     meta: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, default=dict, server_default="{}")
     weight: Mapped[Decimal] = mapped_column(Numeric(4, 3), nullable=False, default=1.0, server_default="1.0")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     source_trip_plan: Mapped["TripPlanRecord | None"] = relationship(back_populates="memory_items")
