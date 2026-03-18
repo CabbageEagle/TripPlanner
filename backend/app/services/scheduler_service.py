@@ -18,6 +18,44 @@ class ScheduleConfig:
     city: str = ""
 
 
+def schedule_trip_plan(plan: dict[str, Any], cfg: ScheduleConfig) -> tuple[dict[str, Any], list[str]]:
+    """对完整 TripPlan 进行排程，返回更新后的计划和告警列表。"""
+    if not isinstance(plan, dict):
+        return plan, ["排程跳过: plan 非字典结构"]
+
+    days = plan.get("days")
+    if not isinstance(days, list):
+        return plan, ["排程跳过: days 字段不是列表"]
+
+    warnings: list[str] = []
+    scheduled_days: list[Any] = []
+
+    for idx, day in enumerate(days):
+        if not isinstance(day, dict):
+            warnings.append(f"第{idx + 1}天排程跳过: day 非字典结构")
+            scheduled_days.append(day)
+            continue
+
+        try:
+            scheduled_day, day_warnings = schedule_day_plan(day, cfg)
+            scheduled_days.append(scheduled_day)
+            warnings.extend([f"第{idx + 1}天: {warning}" for warning in day_warnings])
+        except Exception as exc:
+            warnings.append(f"第{idx + 1}天排程失败: {exc}")
+            scheduled_days.append(day)
+
+    plan["days"] = scheduled_days
+
+    if warnings:
+        existing_warnings = plan.get("warnings")
+        if not isinstance(existing_warnings, list):
+            existing_warnings = []
+        existing_warnings.extend([f"排程: {item}" for item in warnings])
+        plan["warnings"] = _dedupe_text_list(existing_warnings)
+
+    return plan, warnings
+
+
 def schedule_day_plan(day: dict[str, Any], cfg: ScheduleConfig) -> tuple[dict[str, Any], list[str]]:
     warnings: list[str] = []
 
@@ -202,7 +240,8 @@ def _estimate_travel_minutes(
         return cfg.default_travel_minutes
 
     settings = get_settings()
-    if not settings.schedule_use_mcp_route:
+    use_mcp_route = settings.schedule_use_mcp_route or bool(settings.amap_api_key)
+    if not use_mcp_route:
         return cfg.default_travel_minutes
 
     if not settings.amap_api_key:
@@ -292,4 +331,16 @@ def _safe_int(value: Any, *, default: int, min_value: int | None = None) -> int:
         result = default
     if min_value is not None:
         result = max(min_value, result)
+    return result
+
+
+def _dedupe_text_list(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        text = str(item).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
     return result
