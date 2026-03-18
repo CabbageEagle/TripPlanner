@@ -5,6 +5,7 @@ import math
 import re
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from langchain_openai import OpenAIEmbeddings
@@ -25,15 +26,12 @@ from ..repositories.memory_repository import (
 
 MEMORY_RETRIEVAL_TYPES = ["preference", "dislike", "habit", "constraint", "summary"]
 EMBEDDING_DIMENSIONS = 1536
-
-
 @dataclass
 class MemoryDraft:
     memory_type: str
     content: str
     metadata: dict[str, Any]
     weight: float = 1.0
-
 
 def build_request_query_text(request: TripRequest) -> str:
     return "\n".join(

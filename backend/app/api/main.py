@@ -2,6 +2,7 @@
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Request
 from ..config import get_settings, validate_config, print_config
 from .routes import trip, poi, map as map_routes
 
@@ -30,6 +31,18 @@ app.add_middleware(
 app.include_router(trip.router, prefix="/api")
 app.include_router(poi.router, prefix="/api")
 app.include_router(map_routes.router, prefix="/api")
+
+
+@app.middleware("http")
+async def log_trip_requests(request: Request, call_next):
+    """统一记录 trip 相关请求，便于定位是否命中 /api/trip/plan。"""
+    path = request.url.path
+    if path.startswith("/api/trip"):
+        print(f"[HTTP] -> {request.method} {path}", flush=True)
+    response = await call_next(request)
+    if path.startswith("/api/trip"):
+        print(f"[HTTP] <- {request.method} {path} {response.status_code}", flush=True)
+    return response
 
 
 @app.on_event("startup")
@@ -94,6 +107,6 @@ if __name__ == "__main__":
         "app.api.main:app",
         host=settings.host,
         port=settings.port,
-        reload=True
+        reload=True,
+        access_log=True
     )
-

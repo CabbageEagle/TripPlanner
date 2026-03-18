@@ -10,6 +10,7 @@ from .graph_nodes import (
     search_hotels_node,
     plan_trip_node,
     parse_plan_node,
+    schedule_plan_node,
     verify_plan_node,
     fix_plan_node,
     error_handler_node,
@@ -25,7 +26,7 @@ class LangGraphTripPlanner:
     
     def __init__(self):
         """初始化 LangGraph 工作流"""
-        print("🔄 开始初始化 LangGraph 旅行规划系统...")
+        print("[LANGGRAPH] 开始初始化旅行规划系统...")
         
         # 创建状态图
         workflow = StateGraph(TripPlannerState)
@@ -36,6 +37,7 @@ class LangGraphTripPlanner:
         workflow.add_node("search_hotels", search_hotels_node)
         workflow.add_node("plan_trip", plan_trip_node)
         workflow.add_node("parse_plan", parse_plan_node)
+        workflow.add_node("schedule_plan", schedule_plan_node)
         workflow.add_node("verify_plan", verify_plan_node)
         workflow.add_node("fix_plan", fix_plan_node)
         workflow.add_node("error_handler", error_handler_node)
@@ -56,11 +58,13 @@ class LangGraphTripPlanner:
             "parse_plan",
             should_retry_parse,
             {
-                "verify_plan": "verify_plan",
+                "schedule_plan": "schedule_plan",
                 "parse_plan": "parse_plan",
                 "error_handler": "error_handler"
             }
         )
+
+        workflow.add_edge("schedule_plan", "verify_plan")
         
         # 条件边：验证失败则修复，通过则结束
         workflow.add_conditional_edges(
@@ -81,7 +85,7 @@ class LangGraphTripPlanner:
         # 编译图
         self.app = workflow.compile()
         
-        print("✅ LangGraph 旅行规划系统初始化成功")
+        print("[LANGGRAPH] 旅行规划系统初始化成功")
         print("   流程: 数据收集 -> 规划 -> 解析 -> 校验 -> [修复回环] -> 结束")
     
     def plan_trip(self, request: TripRequest, inferred_preferences: str | None = None) -> TripPlan:
@@ -96,7 +100,7 @@ class LangGraphTripPlanner:
         """
         try:
             print(f"\n{'='*60}")
-            print(f"🚀 开始 LangGraph 工作流...")
+            print("[LANGGRAPH] 开始执行工作流...")
             print(f"目的地: {request.city}")
             print(f"日期: {request.start_date} 至 {request.end_date}")
             print(f"天数: {request.travel_days}天")
@@ -115,6 +119,9 @@ class LangGraphTripPlanner:
                 "violations": None,
                 "verify_count": 0,
                 "parse_retry_count": 0,
+                "schedule_applied": False,
+                "schedule_retry_count": 0,
+                "schedule_notes": [],
                 "current_step": "initialized",
                 "error": None
             }
@@ -134,28 +141,28 @@ class LangGraphTripPlanner:
                 try:
                     trip_plan = TripPlan(**final_plan_dict)
                 except Exception as e:
-                    print(f"⚠️  转换为 TripPlan 失败: {str(e)}, 使用备用方案")
-                    trip_plan = self._create_fallback_plan(request)
+                    print(f"[LANGGRAPH] 转换为 TripPlan 失败: {str(e)}")
+                    raise ValueError(f"结构化计划校验失败: {str(e)}") from e
             
             # 打印验证统计
             verify_count = final_state.get("verify_count", 0)
             violations = final_state.get("violations")
             print(f"\n{'='*60}")
-            print(f"✅ 旅行计划生成完成!")
+            print("[LANGGRAPH] 旅行计划生成完成")
             print(f"   验证次数: {verify_count}")
             if violations:
-                print(f"   ⚠️  存在 {len(violations)} 个未解决的问题")
+                print(f"   [WARN] 存在 {len(violations)} 个未解决的问题")
             else:
-                print(f"   ✓ 所有验证通过")
+                print("   [OK] 所有验证通过")
             print(f"{'='*60}\n")
             
             return trip_plan
             
         except Exception as e:
-            print(f"❌ 生成旅行计划失败: {str(e)}")
+            print(f"[LANGGRAPH] 生成旅行计划失败: {str(e)}")
             import traceback
             traceback.print_exc()
-            return self._create_fallback_plan(request)
+            raise RuntimeError(f"生成旅行计划失败: {str(e)}") from e
     
     def _parse_response(self, response: str, request: TripRequest) -> TripPlan:
         """
@@ -195,9 +202,8 @@ class LangGraphTripPlanner:
             return trip_plan
             
         except Exception as e:
-            print(f"⚠️  解析响应失败: {str(e)}")
-            print(f"   将使用备用方案生成计划")
-            return self._create_fallback_plan(request)
+            print(f"[LANGGRAPH] 解析响应失败: {str(e)}")
+            raise ValueError(f"解析模型响应失败: {str(e)}") from e
     
     def _create_fallback_plan(self, request: TripRequest) -> TripPlan:
         """创建备用计划(当流程失败时)"""

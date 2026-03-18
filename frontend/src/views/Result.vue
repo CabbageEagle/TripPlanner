@@ -218,6 +218,13 @@
               </div>
 
               <a-divider v-if="day.timeline && day.timeline.length > 0" orientation="left">🕐 时间线</a-divider>
+              <a-alert
+                v-if="editMode && day.timeline && day.timeline.length > 0"
+                type="warning"
+                show-icon
+                message="编辑景点顺序或时长后，当前时间线可能过期，建议保存后重新生成行程。"
+                style="margin-bottom: 12px"
+              />
               <a-timeline v-if="day.timeline && day.timeline.length > 0">
                 <a-timeline-item v-for="(timelineItem, timelineIndex) in day.timeline" :key="`timeline-${day.day_index}-${timelineIndex}`">
                   <strong>{{ timelineItem.start_time }} - {{ timelineItem.end_time }}</strong>
@@ -294,6 +301,10 @@
                       <div v-else>
                         <p><strong>地址:</strong> {{ item.address }}</p>
                         <p><strong>游览时长:</strong> {{ item.visit_duration }}分钟</p>
+                        <p v-if="item.visit_start_time && item.visit_end_time">
+                          <strong>建议时间:</strong> {{ item.visit_start_time }} - {{ item.visit_end_time }}
+                        </p>
+                        <p v-if="item.opening_hours"><strong>开放时间:</strong> {{ item.opening_hours }}</p>
                         <p><strong>描述:</strong> {{ item.description }}</p>
                         <p v-if="item.rating"><strong>评分:</strong> {{ item.rating }}⭐</p>
                       </div>

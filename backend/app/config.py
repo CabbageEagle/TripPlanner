@@ -1,4 +1,4 @@
-﻿"""应用配置管理。"""
+"""应用配置管理。"""
 
 import os
 from pathlib import Path
@@ -6,7 +6,6 @@ from typing import List
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
-
 
 load_dotenv()
 
@@ -41,6 +40,7 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4"
     openai_embedding_model: str = "text-embedding-3-small"
     rag_debug: bool = False
+    schedule_use_mcp_route: bool = False
 
     log_level: str = "INFO"
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/trip_planner"

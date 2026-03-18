@@ -17,6 +17,7 @@ from ...repositories.trip_repository import (
     get_trip_plan,
     save_new_trip_plan_version,
 )
+from ...services.scheduler_service import ScheduleConfig, schedule_day_plan
 from ...services.memory_service import (
     extract_memories_from_edit,
     extract_memories_from_request,
@@ -33,9 +34,25 @@ def _parse_iso_date(value: str) -> date:
     return date.fromisoformat(value)
 
 
+def _infer_route_type(transportation: str | None) -> str:
+    text = str(transportation or "").lower()
+    if any(keyword in text for keyword in ["自驾", "开车", "驾车", "打车", "taxi", "car", "driving"]):
+        return "driving"
+    if any(keyword in text for keyword in ["公交", "地铁", "公共", "bus", "subway", "transit"]):
+        return "transit"
+    return "walking"
+
+
+def _safe_int(value: object, default: int) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
 def _rag_debug_log(message: str) -> None:
     if settings.rag_debug:
-        print(f"[RAG_DEBUG] {message}")
+        print(f"[RAG_DEBUG] {message}", flush=True)
 
 
 @router.post(
@@ -47,12 +64,12 @@ def _rag_debug_log(message: str) -> None:
 async def plan_trip(request: TripRequest, db: Session = Depends(get_db)):
     """生成旅行计划并持久化到数据库。"""
     try:
-        print(f"\n{'='*60}")
-        print("收到旅行规划请求:")
-        print(f"   城市: {request.city}")
-        print(f"   日期: {request.start_date} - {request.end_date}")
-        print(f"   天数: {request.travel_days}")
-        print(f"{'='*60}\n")
+        print(f"\n{'='*60}", flush=True)
+        print("收到旅行规划请求:", flush=True)
+        print(f"   城市: {request.city}", flush=True)
+        print(f"   日期: {request.start_date} - {request.end_date}", flush=True)
+        print(f"   天数: {request.travel_days}", flush=True)
+        print(f"{'='*60}\n", flush=True)
 
         retrieved_memories = retrieve_relevant_memories(db, request=request, limit=5)
         inferred_preferences = summarize_preferences(retrieved_memories)
@@ -120,7 +137,7 @@ async def plan_trip(request: TripRequest, db: Session = Depends(get_db)):
 
     except Exception as e:
         db.rollback()
-        print(f"生成旅行计划失败: {str(e)}")
+        print(f"生成旅行计划失败: {str(e)}", flush=True)
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"生成旅行计划失败: {str(e)}")
@@ -153,6 +170,7 @@ async def health_check():
 )
 async def get_trip(plan_id: UUID, db: Session = Depends(get_db)):
     """获取已保存的旅行计划。"""
+    print(f"[API] 获取行程 plan_id={plan_id}", flush=True)
     trip_record = get_trip_plan(db, plan_id)
     if trip_record is None:
         raise HTTPException(status_code=404, detail="旅行计划不存在")
@@ -179,12 +197,46 @@ async def get_trip(plan_id: UUID, db: Session = Depends(get_db)):
 async def update_trip(plan_id: UUID, request: TripPlanUpdateRequest, db: Session = Depends(get_db)):
     """更新已保存的旅行计划。"""
     try:
+        print(f"[API] 更新行程 plan_id={plan_id}", flush=True)
         trip_record = get_trip_plan(db, plan_id)
         if trip_record is None:
             raise HTTPException(status_code=404, detail="旅行计划不存在")
 
         previous_plan = TripPlan(**trip_record.current_plan_payload)
         updated_payload = request.data.model_dump()
+        request_payload = trip_record.request_payload if isinstance(trip_record.request_payload, dict) else {}
+
+        transportation_pref = request_payload.get("transportation")
+        if not transportation_pref and request.data.days:
+            transportation_pref = request.data.days[0].transportation
+
+        schedule_cfg = ScheduleConfig(
+            daily_start_time=str(request_payload.get("daily_start_time") or "09:00"),
+            daily_end_time=str(request_payload.get("daily_end_time") or "21:00"),
+            min_rest_time=_safe_int(request_payload.get("min_rest_time"), 15),
+            default_travel_minutes=20,
+            route_type=_infer_route_type(str(transportation_pref or "")),
+            city=str(request_payload.get("city") or request.data.city),
+        )
+        schedule_warnings: list[str] = []
+        days = updated_payload.get("days", []) if isinstance(updated_payload, dict) else []
+        if isinstance(days, list):
+            scheduled_days = []
+            for idx, day in enumerate(days):
+                if not isinstance(day, dict):
+                    scheduled_days.append(day)
+                    continue
+                try:
+                    scheduled_day, day_warnings = schedule_day_plan(day, schedule_cfg)
+                    scheduled_days.append(scheduled_day)
+                    schedule_warnings.extend([f"第{idx + 1}天: {warning}" for warning in day_warnings])
+                except Exception as exc:
+                    schedule_warnings.append(f"第{idx + 1}天排程失败: {exc}")
+                    scheduled_days.append(day)
+            updated_payload["days"] = scheduled_days
+        if schedule_warnings:
+            print(f"[API] 编辑后自动重排完成，告警 {len(schedule_warnings)} 条", flush=True)
+
         save_new_trip_plan_version(
             db,
             trip_plan_id=plan_id,
@@ -213,7 +265,7 @@ async def update_trip(plan_id: UUID, request: TripPlanUpdateRequest, db: Session
             success=True,
             message="旅行计划保存成功",
             plan_id=str(plan_id),
-            data=request.data,
+            data=TripPlan(**updated_payload),
         )
     except HTTPException:
         db.rollback()

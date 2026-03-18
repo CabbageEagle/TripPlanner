@@ -5,6 +5,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from .graph_state import TripPlannerState
 from ..config import get_settings
+from ..services.scheduler_service import ScheduleConfig, schedule_day_plan
 import json
 
 
@@ -21,7 +22,7 @@ def create_llm():
 
 def search_attractions_node(state: TripPlannerState) -> Dict[str, Any]:
     """景点搜索节点"""
-    print("📍 正在搜索景点...")
+    print("[GRAPH] 正在搜索景点...")
     
     request = state["request"]
     llm = create_llm()
@@ -69,7 +70,7 @@ def search_attractions_node(state: TripPlannerState) -> Dict[str, Any]:
     response = llm.invoke(messages)
     attractions_data = response.content
     
-    print(f"✓ 景点搜索完成: {len(attractions_data)} 字符")
+    print(f"[GRAPH] 景点搜索完成: {len(attractions_data)} 字符")
     
     return {
         "attractions_data": attractions_data,
@@ -120,7 +121,7 @@ def query_weather_node(state: TripPlannerState) -> Dict[str, Any]:
     response = llm.invoke(messages)
     weather_data = response.content
     
-    print(f"✓ 天气查询完成: {len(weather_data)} 字符")
+    print(f"[GRAPH] 天气查询完成: {len(weather_data)} 字符")
     
     return {
         "weather_data": weather_data,
@@ -130,7 +131,7 @@ def query_weather_node(state: TripPlannerState) -> Dict[str, Any]:
 
 def search_hotels_node(state: TripPlannerState) -> Dict[str, Any]:
     """酒店搜索节点"""
-    print("🏨 正在搜索酒店...")
+    print("[GRAPH] 正在搜索酒店...")
     
     request = state["request"]
     llm = create_llm()
@@ -174,7 +175,7 @@ def search_hotels_node(state: TripPlannerState) -> Dict[str, Any]:
     response = llm.invoke(messages)
     hotel_data = response.content
     
-    print(f"✓ 酒店搜索完成: {len(hotel_data)} 字符")
+    print(f"[GRAPH] 酒店搜索完成: {len(hotel_data)} 字符")
     
     return {
         "hotel_data": hotel_data,
@@ -184,7 +185,7 @@ def search_hotels_node(state: TripPlannerState) -> Dict[str, Any]:
 
 def plan_trip_node(state: TripPlannerState) -> Dict[str, Any]:
     """行程规划节点"""
-    print("📋 正在生成行程计划...")
+    print("[GRAPH] 正在生成行程计划...")
     
     request = state["request"]
     attractions_data = state.get("attractions_data", "")
@@ -285,7 +286,7 @@ def plan_trip_node(state: TripPlannerState) -> Dict[str, Any]:
     response = llm.invoke(messages)
     final_plan_raw = response.content
     
-    print(f"✓ 行程规划完成: {len(final_plan_raw)} 字符")
+    print(f"[GRAPH] 行程规划完成: {len(final_plan_raw)} 字符")
     
     return {
         "final_plan_raw": final_plan_raw,
@@ -295,7 +296,7 @@ def plan_trip_node(state: TripPlannerState) -> Dict[str, Any]:
 
 def error_handler_node(state: TripPlannerState) -> Dict[str, Any]:
     """错误处理节点"""
-    print("❌ 发生错误，使用备用方案...")
+    print("[GRAPH] 发生错误，使用备用方案...")
     
     error = state.get("error", "Unknown error")
     print(f"错误信息: {error}")
@@ -325,7 +326,7 @@ def parse_plan_node(state: TripPlannerState) -> Dict[str, Any]:
     parse_retry_count = state.get("parse_retry_count", 0)
     
     if not final_plan_raw:
-        print("❌ 未找到原始计划数据")
+        print("[GRAPH] 未找到原始计划数据")
         return {
             "error": "No raw plan data found",
             "parse_retry_count": parse_retry_count + 1,
@@ -353,7 +354,7 @@ def parse_plan_node(state: TripPlannerState) -> Dict[str, Any]:
         # 解析 JSON
         final_plan = json.loads(json_str)
         
-        print(f"✓ 解析成功: {final_plan.get('city', 'Unknown')} {len(final_plan.get('days', []))}天行程")
+        print(f"[GRAPH] 解析成功: {final_plan.get('city', 'Unknown')} {len(final_plan.get('days', []))}天行程")
         
         return {
             "final_plan": final_plan,
@@ -362,7 +363,7 @@ def parse_plan_node(state: TripPlannerState) -> Dict[str, Any]:
         }
         
     except Exception as e:
-        print(f"❌ 解析失败: {str(e)}")
+        print(f"[GRAPH] 解析失败: {str(e)}")
         return {
             "error": f"Parse error: {str(e)}",
             "parse_retry_count": parse_retry_count + 1,
@@ -370,9 +371,79 @@ def parse_plan_node(state: TripPlannerState) -> Dict[str, Any]:
         }
 
 
+def schedule_plan_node(state: TripPlannerState) -> Dict[str, Any]:
+    """对解析后的 plan 进行时间排程，填充景点时间和 timeline。"""
+    print("[SCHEDULE] 正在生成可执行时间线...")
+
+    final_plan = state.get("final_plan")
+    request = state["request"]
+    if not isinstance(final_plan, dict):
+        return {
+            "schedule_applied": False,
+            "schedule_notes": ["排程跳过: final_plan 非结构化数据"],
+            "current_step": "schedule_skipped"
+        }
+
+    schedule_retry_count = state.get("schedule_retry_count", 0)
+
+    cfg = ScheduleConfig(
+        daily_start_time=request.daily_start_time or "09:00",
+        daily_end_time=request.daily_end_time or "21:00",
+        min_rest_time=request.min_rest_time or 15,
+        default_travel_minutes=20,
+        route_type=_infer_route_type(request.transportation),
+        city=request.city,
+    )
+
+    days = final_plan.get("days", [])
+    if not isinstance(days, list):
+        return {
+            "schedule_applied": False,
+            "schedule_notes": ["排程跳过: days 字段不是列表"],
+            "current_step": "schedule_skipped"
+        }
+
+    warnings: list[str] = []
+    schedule_failed = False
+    scheduled_days: list[dict[str, Any]] = []
+    for idx, day in enumerate(days):
+        if not isinstance(day, dict):
+            scheduled_days.append(day)
+            continue
+        try:
+            scheduled_day, day_warnings = schedule_day_plan(day, cfg)
+            scheduled_days.append(scheduled_day)
+            warnings.extend([f"第{idx + 1}天: {warning}" for warning in day_warnings])
+        except Exception as exc:
+            schedule_failed = True
+            warnings.append(f"第{idx + 1}天排程失败: {exc}")
+            scheduled_days.append(day)
+
+    final_plan["days"] = scheduled_days
+    if warnings:
+        existing_warnings = final_plan.get("warnings")
+        if not isinstance(existing_warnings, list):
+            existing_warnings = []
+        existing_warnings.extend([f"排程: {item}" for item in warnings])
+        final_plan["warnings"] = _dedupe_text_list(existing_warnings)
+
+    if warnings:
+        print(f"[SCHEDULE] 排程完成，告警 {len(warnings)} 条")
+    else:
+        print("[SCHEDULE] 排程完成，无告警")
+
+    return {
+        "final_plan": final_plan,
+        "schedule_applied": not schedule_failed,
+        "schedule_retry_count": schedule_retry_count,
+        "schedule_notes": warnings,
+        "current_step": "plan_scheduled"
+    }
+
+
 def verify_plan_node(state: TripPlannerState) -> Dict[str, Any]:
     """校验节点：检查计划的完整性和合理性"""
-    print("✅ 正在校验行程计划...")
+    print("[GRAPH] 正在校验行程计划...")
     
     final_plan = state.get("final_plan")
     request = state["request"]
@@ -472,7 +543,7 @@ def verify_plan_node(state: TripPlannerState) -> Dict[str, Any]:
         })
     
     if violations:
-        print(f"⚠️  发现 {len(violations)} 个问题:")
+        print(f"[GRAPH] 发现 {len(violations)} 个问题:")
         for v in violations:
             print(f"   - [{v['severity']}] {v['message']}")
         return {
@@ -480,7 +551,7 @@ def verify_plan_node(state: TripPlannerState) -> Dict[str, Any]:
             "current_step": "verify_failed"
         }
     else:
-        print("✓ 校验通过，计划完整")
+        print("[GRAPH] 校验通过，计划完整")
         return {
             "violations": None,
             "current_step": "verify_passed"
@@ -489,7 +560,7 @@ def verify_plan_node(state: TripPlannerState) -> Dict[str, Any]:
 
 def fix_plan_node(state: TripPlannerState) -> Dict[str, Any]:
     """修复节点：根据校验问题精准修复计划"""
-    print("🔧 正在修复行程计划...")
+    print("[GRAPH] 正在修复行程计划...")
     
     violations = state.get("violations", [])
     final_plan = state.get("final_plan", {})
@@ -504,7 +575,7 @@ def fix_plan_node(state: TripPlannerState) -> Dict[str, Any]:
     
     # 如果没有可修复问题，直接返回原计划
     if not fixable_issues:
-        print("⚠️  没有可修复的问题，保持原计划")
+        print("[GRAPH] 没有可修复的问题，保持原计划")
         return {
             "final_plan_raw": json.dumps(final_plan, ensure_ascii=False),
             "current_step": "plan_fixed"
@@ -574,7 +645,7 @@ def fix_plan_node(state: TripPlannerState) -> Dict[str, Any]:
     response = llm.invoke(messages)
     fixed_plan_raw = response.content
     
-    print(f"✓ 修复完成: {len(fixed_plan_raw)} 字符")
+    print(f"[GRAPH] 修复完成: {len(fixed_plan_raw)} 字符")
     
     return {
         "final_plan_raw": fixed_plan_raw,
@@ -585,21 +656,42 @@ def fix_plan_node(state: TripPlannerState) -> Dict[str, Any]:
 
 # ==================== 条件路由函数 ====================
 
-def should_retry_parse(state: TripPlannerState) -> Literal["verify_plan", "parse_plan", "error_handler"]:
+def _infer_route_type(transportation: str | None) -> str:
+    text = str(transportation or "").lower()
+    if any(keyword in text for keyword in ["自驾", "开车", "驾车", "打车", "taxi", "car", "driving"]):
+        return "driving"
+    if any(keyword in text for keyword in ["公交", "地铁", "公共", "bus", "subway", "transit"]):
+        return "transit"
+    return "walking"
+
+
+def _dedupe_text_list(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        text = str(item).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def should_retry_parse(state: TripPlannerState) -> Literal["schedule_plan", "parse_plan", "error_handler"]:
     """决定解析后的下一步：成功→验证，失败→重试或错误处理"""
     # 解析成功，进入验证
     if state.get("current_step") == "plan_parsed":
-        return "verify_plan"
+        return "schedule_plan"
     
     # 解析失败，检查是否可以重试
     parse_retry_count = state.get("parse_retry_count", 0)
     MAX_PARSE_RETRIES = 3
     
     if parse_retry_count >= MAX_PARSE_RETRIES:
-        print(f"❌ 解析重试次数已达上限 ({MAX_PARSE_RETRIES}), 进入错误处理")
+        print(f"[GRAPH] 解析重试次数已达上限 ({MAX_PARSE_RETRIES}), 进入错误处理")
         return "error_handler"
     
-    print(f"🔄 重新尝试解析 (第 {parse_retry_count} 次/{MAX_PARSE_RETRIES})")
+    print(f"[GRAPH] 重新尝试解析 (第 {parse_retry_count} 次/{MAX_PARSE_RETRIES})")
     return "parse_plan"
 
 
@@ -613,7 +705,7 @@ def should_fix_or_end(state: TripPlannerState) -> Literal["fix_plan", "END"]:
     
     # 策略1: 无问题直接结束
     if not violations:
-        print("✅ 校验通过，流程结束")
+        print("[GRAPH] 校验通过，流程结束")
         return "END"
     
     print(f"🔍 [DEBUG] violations数量: {len(violations)}")
@@ -621,14 +713,14 @@ def should_fix_or_end(state: TripPlannerState) -> Literal["fix_plan", "END"]:
     # 策略2: 检查是否有不可修复的问题
     unfixable = [v for v in violations if not v.get("fixable", True)]
     if unfixable:
-        print(f"⚠️  发现 {len(unfixable)} 个不可修复问题，放弃修复")
+        print(f"[GRAPH] 发现 {len(unfixable)} 个不可修复问题，放弃修复")
         for v in unfixable:
             print(f"   - {v['message']}")
         return "END"
     
     # 策略3: 限制修复次数
     if verify_count >= MAX_VERIFY_ATTEMPTS:
-        print(f"⚠️  已尝试修复 {verify_count} 次，接受当前结果")
+        print(f"[GRAPH] 已尝试修复 {verify_count} 次，接受当前结果")
         return "END"
     
     # 策略4: 只修复 critical 或 high 级别且 fixable 的问题
@@ -643,16 +735,16 @@ def should_fix_or_end(state: TripPlannerState) -> Literal["fix_plan", "END"]:
     
     # 策略5: 问题太多，放弃修复
     if len(fixable_important) > 3:
-        print(f"⚠️  可修复问题过多({len(fixable_important)}个)，接受当前结果")
+        print(f"[GRAPH] 可修复问题过多({len(fixable_important)}个)，接受当前结果")
         return "END"
     
     # 策略6: 有少量可修复的重要问题，尝试修复
     if len(fixable_important) > 0:
-        print(f"🔧 发现 {len(fixable_important)} 个可修复的重要问题，尝试修复")
+        print(f"[GRAPH] 发现 {len(fixable_important)} 个可修复的重要问题，尝试修复")
         for v in fixable_important:
             print(f"   - {v['message']}")
         return "fix_plan"
     
     # 策略7: 只有 medium/low 级别的问题，直接接受
-    print(f"⚠️  仅有轻微问题({len(violations)}个)，接受当前结果")
+    print(f"[GRAPH] 仅有轻微问题({len(violations)}个)，接受当前结果")
     return "END"

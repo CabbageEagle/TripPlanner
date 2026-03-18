@@ -24,6 +24,9 @@ class TripPlannerState(TypedDict):
     violations: Optional[list[Dict[str,Any]]]  # 修复拼写错误
     verify_count: int
     parse_retry_count: int
+    schedule_applied: bool
+    schedule_retry_count: int
+    schedule_notes: list[str]
     
     # 控制流
     current_step: str

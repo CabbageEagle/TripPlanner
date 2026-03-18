@@ -15,6 +15,9 @@ export interface Attraction {
   rating?: number
   image_url?: string
   ticket_price?: number
+  opening_hours?: string
+  visit_start_time?: string
+  visit_end_time?: string
 }
 
 export interface Meal {

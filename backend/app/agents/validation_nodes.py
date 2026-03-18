@@ -38,8 +38,12 @@ def check_time_conflicts_node(state: TripPlannerState) -> Dict[str, Any]:
                 "day_index": day_index
             })
         
-        # 生成时间线并检查冲突
-        timeline = _generate_timeline(day, daily_start, daily_end)
+        # 优先使用排程器生成的 timeline，避免与排程结果不一致
+        existing_timeline = day.get("timeline")
+        if isinstance(existing_timeline, list) and existing_timeline:
+            timeline = existing_timeline
+        else:
+            timeline = _generate_timeline(day, daily_start, daily_end)
         day_conflicts = _detect_timeline_conflicts(timeline, day_index, daily_end)
         conflicts.extend(day_conflicts)
     
