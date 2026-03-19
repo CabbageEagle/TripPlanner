@@ -247,13 +247,13 @@ def summarize_preferences(memories: list[MemoryItem]) -> str:
 
 def embed_text(text: str) -> list[float]:
     settings = get_settings()
-    api_key = settings.openai_api_key
+    api_key = settings.llm_api_key
     if api_key:
         try:
             embeddings = OpenAIEmbeddings(
-                model=settings.openai_embedding_model,
+                model=settings.llm_embedding_model,
                 api_key=api_key,
-                base_url=settings.openai_base_url,
+                base_url=settings.llm_base_url,
             )
             return embeddings.embed_query(text)
         except Exception:

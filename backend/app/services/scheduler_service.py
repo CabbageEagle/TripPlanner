@@ -240,7 +240,8 @@ def _estimate_travel_minutes(
         return cfg.default_travel_minutes
 
     settings = get_settings()
-    use_mcp_route = settings.schedule_use_mcp_route or bool(settings.amap_api_key)
+    # 仅在显式开启时才使用 MCP 路由，避免“配置了 key 就默认频繁连 MCP”。
+    use_mcp_route = settings.schedule_use_mcp_route
     if not use_mcp_route:
         return cfg.default_travel_minutes
 

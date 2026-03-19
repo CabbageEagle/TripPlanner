@@ -1,10 +1,12 @@
 ﻿"""旅行规划 API 路由"""
 
 import asyncio
+import json
 from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from ...agents.trip_planner_agent_langgraph import get_trip_planner_agent
@@ -53,6 +55,11 @@ def _safe_int(value: object, default: int) -> int:
 def _rag_debug_log(message: str) -> None:
     if settings.rag_debug:
         print(f"[RAG_DEBUG] {message}", flush=True)
+
+
+def _sse(event: str, data: dict[str, object]) -> str:
+    payload = json.dumps(data, ensure_ascii=False)
+    return f"event: {event}\ndata: {payload}\n\n"
 
 
 @router.post(
@@ -141,6 +148,123 @@ async def plan_trip(request: TripRequest, db: Session = Depends(get_db)):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"生成旅行计划失败: {str(e)}")
+
+
+@router.post(
+    "/plan/stream",
+    summary="流式生成旅行计划",
+    description="以 SSE 方式返回规划进度和最终旅行计划",
+)
+async def plan_trip_stream(request: TripRequest, db: Session = Depends(get_db)):
+    """流式生成旅行计划（SSE）。"""
+
+    async def event_generator():
+        try:
+            yield _sse(
+                "progress",
+                {"step": "received", "percent": 5, "message": "请求已接收，开始处理"},
+            )
+
+            print(f"\n{'='*60}", flush=True)
+            print("收到流式旅行规划请求:", flush=True)
+            print(f"   城市: {request.city}", flush=True)
+            print(f"   日期: {request.start_date} - {request.end_date}", flush=True)
+            print(f"   天数: {request.travel_days}", flush=True)
+            print(f"{'='*60}\n", flush=True)
+
+            yield _sse(
+                "progress",
+                {"step": "retrieving_memory", "percent": 15, "message": "正在检索历史偏好"},
+            )
+            retrieved_memories = retrieve_relevant_memories(db, request=request, limit=5)
+            inferred_preferences = summarize_preferences(retrieved_memories)
+            if settings.rag_debug:
+                _rag_debug_log(f"retrieved_memories_count={len(retrieved_memories)}")
+                for index, memory in enumerate(retrieved_memories, start=1):
+                    signal = ""
+                    if isinstance(memory.meta, dict):
+                        signal = str(memory.meta.get("signal", ""))
+                    content = memory.content.replace("\n", " ").strip()
+                    if len(content) > 120:
+                        content = f"{content[:117]}..."
+                    _rag_debug_log(
+                        f"retrieved[{index}] type={memory.memory_type} signal={signal or '-'} content={content}"
+                    )
+                _rag_debug_log(
+                    "inferred_preferences="
+                    + (inferred_preferences.replace("\n", " | ") if inferred_preferences else "<empty>")
+                )
+
+            yield _sse(
+                "progress",
+                {"step": "planning", "percent": 45, "message": "正在生成旅行计划"},
+            )
+            agent = get_trip_planner_agent()
+            trip_plan = await asyncio.to_thread(agent.plan_trip, request, inferred_preferences)
+            plan_payload = trip_plan.model_dump()
+            request_payload = request.model_dump()
+
+            yield _sse(
+                "progress",
+                {"step": "persisting", "percent": 75, "message": "正在保存行程与记忆"},
+            )
+            trip_record = create_trip_plan(
+                db,
+                city=request.city,
+                start_date=_parse_iso_date(request.start_date),
+                end_date=_parse_iso_date(request.end_date),
+                travel_days=request.travel_days,
+                request_payload=request_payload,
+                current_plan_payload=plan_payload,
+            )
+            create_trip_plan_version(
+                db,
+                trip_plan_id=trip_record.id,
+                version_no=1,
+                source="generated",
+                plan_payload=plan_payload,
+            )
+            request_memories = extract_memories_from_request(request)
+            if settings.rag_debug:
+                _rag_debug_log(f"request_memories_count={len(request_memories)}")
+                for index, memory in enumerate(request_memories, start=1):
+                    signal = str(memory.metadata.get("signal", "-"))
+                    _rag_debug_log(
+                        f"request_memory[{index}] type={memory.memory_type} signal={signal} content={memory.content}"
+                    )
+            persisted_request_memories = persist_memories(
+                db,
+                memories=request_memories,
+                source_trip_plan_id=trip_record.id,
+            )
+            _rag_debug_log(f"persisted_request_memories={len(persisted_request_memories)}")
+            db.commit()
+
+            done_payload = TripPlanResponse(
+                success=True,
+                message="旅行计划生成成功",
+                plan_id=str(trip_record.id),
+                data=trip_plan,
+            ).model_dump(mode="json")
+            yield _sse(
+                "progress",
+                {"step": "done", "percent": 100, "message": "生成完成"},
+            )
+            yield _sse("done", done_payload)
+        except Exception as e:
+            db.rollback()
+            print(f"流式生成旅行计划失败: {str(e)}", flush=True)
+            yield _sse("error", {"message": f"生成旅行计划失败: {str(e)}"})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get(

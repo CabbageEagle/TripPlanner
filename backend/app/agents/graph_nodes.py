@@ -13,9 +13,9 @@ def create_llm():
     """创建LLM实例"""
     settings = get_settings()
     return ChatOpenAI(
-        model=settings.openai_model,
-        api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
+        model=settings.llm_model,
+        api_key=settings.llm_api_key,
+        base_url=settings.llm_base_url,
         temperature=0.7
     )
 

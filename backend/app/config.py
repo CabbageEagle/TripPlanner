@@ -35,16 +35,30 @@ class Settings(BaseSettings):
     unsplash_access_key: str = os.getenv("UNSPLASH_ACCESS_KEY", "")
     unsplash_secret_key: str = os.getenv("UNSPLASH_SECRET_KEY", "")
 
-    openai_api_key: str = ""
-    openai_base_url: str = "https://api.openai.com/v1"
-    openai_model: str = "gpt-4"
-    openai_embedding_model: str = "text-embedding-3-small"
+    llm_api_key: str = ""
+    llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    llm_model: str = "qwen3.5-plus"
+    llm_embedding_model: str = "text-embedding-3-small"
     rag_debug: bool = False
     schedule_use_mcp_route: bool = False
-
     log_level: str = "INFO"
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/trip_planner"
     database_echo: bool = False
+
+    @property
+    def openai_api_key(self) -> str:
+        """兼容旧字段名，统一映射到 llm_api_key。"""
+        return self.llm_api_key
+
+    @property
+    def openai_base_url(self) -> str:
+        """兼容旧字段名，统一映射到 llm_base_url。"""
+        return self.llm_base_url
+
+    @property
+    def openai_model(self) -> str:
+        """兼容旧字段名，统一映射到 llm_model。"""
+        return self.llm_model
 
     class Config:
         env_file = ".env"
@@ -69,7 +83,7 @@ def validate_config() -> bool:
     if not settings.amap_api_key:
         errors.append("AMAP_API_KEY 未配置")
 
-    llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or settings.openai_api_key
+    llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or settings.llm_api_key
     if not llm_api_key:
         warnings.append("LLM_API_KEY 或 OPENAI_API_KEY 未配置，LLM 功能可能无法使用")
 
@@ -91,9 +105,9 @@ def print_config() -> None:
     print(f"服务地址: {settings.host}:{settings.port}")
     print(f"高德地图 API Key: {'已配置' if settings.amap_api_key else '未配置'}")
 
-    llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or settings.openai_api_key
-    llm_base_url = os.getenv("LLM_BASE_URL") or settings.openai_base_url
-    llm_model = os.getenv("LLM_MODEL_ID") or settings.openai_model
+    llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or settings.llm_api_key
+    llm_base_url = os.getenv("LLM_BASE_URL") or settings.llm_base_url
+    llm_model = os.getenv("LLM_MODEL_ID") or settings.llm_model
 
     print(f"LLM API Key: {'已配置' if llm_api_key else '未配置'}")
     print(f"LLM Base URL: {llm_base_url}")
