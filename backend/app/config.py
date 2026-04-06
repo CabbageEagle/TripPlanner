@@ -1,4 +1,6 @@
-"""应用配置管理。"""
+﻿"""Application configuration management."""
+
+from __future__ import annotations
 
 import os
 from pathlib import Path
@@ -7,19 +9,22 @@ from typing import List
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 
+# Load environment variables from default shell environment first.
 load_dotenv()
 
+# Load backend-local .env if present.
 backend_env = Path(__file__).parent.parent.parent / ".env"
 if backend_env.exists():
     load_dotenv(backend_env, override=False)
 
+# Load optional HelloAgents .env if project is colocated.
 helloagents_env = Path(__file__).parent.parent.parent.parent / "HelloAgents" / ".env"
 if helloagents_env.exists():
     load_dotenv(helloagents_env, override=False)
 
 
 class Settings(BaseSettings):
-    """应用配置。"""
+    """Strongly-typed runtime settings."""
 
     app_name: str = "智能旅行助手"
     app_version: str = "1.0.0"
@@ -38,6 +43,8 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     llm_model: str = "qwen3.5-plus"
+    # Dedicated model for judge/eval (separate from generation model).
+    judge_model: str = "glm-4.7"
     llm_embedding_model: str = "text-embedding-3-small"
     rag_debug: bool = False
     schedule_use_mcp_route: bool = False
@@ -47,17 +54,17 @@ class Settings(BaseSettings):
 
     @property
     def openai_api_key(self) -> str:
-        """兼容旧字段名，统一映射到 llm_api_key。"""
+        """Backward-compatible alias for llm_api_key."""
         return self.llm_api_key
 
     @property
     def openai_base_url(self) -> str:
-        """兼容旧字段名，统一映射到 llm_base_url。"""
+        """Backward-compatible alias for llm_base_url."""
         return self.llm_base_url
 
     @property
     def openai_model(self) -> str:
-        """兼容旧字段名，统一映射到 llm_model。"""
+        """Backward-compatible alias for llm_model."""
         return self.llm_model
 
     class Config:
@@ -66,6 +73,7 @@ class Settings(BaseSettings):
         extra = "ignore"
 
     def get_cors_origins_list(self) -> List[str]:
+        """Split comma-separated CORS origins into normalized list."""
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
 
@@ -73,26 +81,28 @@ settings = Settings()
 
 
 def get_settings() -> Settings:
+    """Return singleton settings object."""
     return settings
 
 
 def validate_config() -> bool:
-    errors = []
-    warnings = []
+    """Validate mandatory configuration and raise on critical errors."""
+    errors: list[str] = []
+    warnings: list[str] = []
 
     if not settings.amap_api_key:
-        errors.append("AMAP_API_KEY 未配置")
+        errors.append("AMAP_API_KEY is not configured")
 
     llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or settings.llm_api_key
     if not llm_api_key:
-        warnings.append("LLM_API_KEY 或 OPENAI_API_KEY 未配置，LLM 功能可能无法使用")
+        warnings.append("LLM_API_KEY / OPENAI_API_KEY is not configured; model features may be unavailable")
 
     if errors:
-        error_msg = "配置错误:\n" + "\n".join(f"  - {e}" for e in errors)
+        error_msg = "Configuration errors:\n" + "\n".join(f"  - {e}" for e in errors)
         raise ValueError(error_msg)
 
     if warnings:
-        print("\n配置警告:")
+        print("\nConfiguration warnings:")
         for warning in warnings:
             print(f"  - {warning}")
 
@@ -100,16 +110,19 @@ def validate_config() -> bool:
 
 
 def print_config() -> None:
-    print(f"应用名称: {settings.app_name}")
-    print(f"版本: {settings.app_version}")
-    print(f"服务地址: {settings.host}:{settings.port}")
-    print(f"高德地图 API Key: {'已配置' if settings.amap_api_key else '未配置'}")
+    """Print key runtime configuration (without exposing secrets)."""
+    print(f"Application: {settings.app_name}")
+    print(f"Version: {settings.app_version}")
+    print(f"Server: {settings.host}:{settings.port}")
+    print(f"AMAP API Key: {'configured' if settings.amap_api_key else 'missing'}")
 
     llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or settings.llm_api_key
     llm_base_url = os.getenv("LLM_BASE_URL") or settings.llm_base_url
     llm_model = os.getenv("LLM_MODEL_ID") or settings.llm_model
+    judge_model = os.getenv("JUDGE_MODEL") or settings.judge_model
 
-    print(f"LLM API Key: {'已配置' if llm_api_key else '未配置'}")
+    print(f"LLM API Key: {'configured' if llm_api_key else 'missing'}")
     print(f"LLM Base URL: {llm_base_url}")
     print(f"LLM Model: {llm_model}")
-    print(f"日志级别: {settings.log_level}")
+    print(f"Judge Model: {judge_model}")
+    print(f"Log Level: {settings.log_level}")

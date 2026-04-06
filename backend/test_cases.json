@@ -1,0 +1,214 @@
+[
+  {
+    "case_id": "TC01",
+    "title": "标准场景（3天城市游）",
+    "note": "基线用例：用于观察正常场景下五维评分稳定性",
+    "expected_status": "ok",
+    "request": {
+      "city": "北京",
+      "start_date": "2026-05-01",
+      "end_date": "2026-05-03",
+      "travel_days": 3,
+      "transportation": "公共交通",
+      "accommodation": "舒适型酒店",
+      "preferences": [
+        "历史文化",
+        "美食"
+      ],
+      "free_text_input": "希望安排故宫和博物馆，晚餐尽量本地特色",
+      "max_budget": 4200,
+      "budget_per_day": 1300,
+      "daily_start_time": "09:00",
+      "daily_end_time": "21:00",
+      "max_walking_time": 30,
+      "min_rest_time": 20,
+      "avoid_rush_hour": true,
+      "max_attractions_per_day": 4
+    }
+  },
+  {
+    "case_id": "TC02",
+    "title": "家庭亲子（5天，慢节奏）",
+    "note": "需求偏好明显：重点观察 requirement_fit 与 schedule_quality",
+    "expected_status": "ok",
+    "request": {
+      "city": "上海",
+      "start_date": "2026-07-10",
+      "end_date": "2026-07-14",
+      "travel_days": 5,
+      "transportation": "打车",
+      "accommodation": "亲子酒店",
+      "preferences": [
+        "亲子",
+        "乐园",
+        "轻松"
+      ],
+      "free_text_input": "带6岁小孩，午休时间要预留，避免太晚回酒店",
+      "max_budget": 9000,
+      "budget_per_day": 1700,
+      "daily_start_time": "10:00",
+      "daily_end_time": "20:00",
+      "max_walking_time": 20,
+      "min_rest_time": 30,
+      "avoid_rush_hour": true,
+      "max_attractions_per_day": 3
+    }
+  },
+  {
+    "case_id": "TC03",
+    "title": "最小天数边界（1天）",
+    "note": "边界用例：travel_days 最小值",
+    "expected_status": "ok",
+    "request": {
+      "city": "杭州",
+      "start_date": "2026-04-18",
+      "end_date": "2026-04-18",
+      "travel_days": 1,
+      "transportation": "步行",
+      "accommodation": "无需住宿",
+      "preferences": [
+        "自然风光",
+        "咖啡店"
+      ],
+      "free_text_input": "一天内尽量少折返",
+      "max_budget": 800,
+      "budget_per_day": 800,
+      "daily_start_time": "09:30",
+      "daily_end_time": "19:00",
+      "max_walking_time": 40,
+      "min_rest_time": 15,
+      "avoid_rush_hour": false,
+      "max_attractions_per_day": 3
+    }
+  },
+  {
+    "case_id": "TC04",
+    "title": "最大天数边界（7天）",
+    "note": "边界用例：travel_days 设为不超过一周的上限",
+    "expected_status": "ok",
+    "request": {
+      "city": "成都",
+      "start_date": "2026-09-01",
+      "end_date": "2026-09-07",
+      "travel_days": 7,
+      "transportation": "公共交通",
+      "accommodation": "经济型酒店",
+      "preferences": [
+        "美食",
+        "城市漫游"
+      ],
+      "free_text_input": "节奏不要太赶，安排1天轻松行程",
+      "max_budget": 4200,
+      "budget_per_day": 600,
+      "daily_start_time": "09:00",
+      "daily_end_time": "21:00",
+      "max_walking_time": 30,
+      "min_rest_time": 20,
+      "avoid_rush_hour": true,
+      "max_attractions_per_day": 2
+    }
+  },
+  {
+    "case_id": "TC05",
+    "title": "预算下限边界（max_budget=500）",
+    "note": "预算边界：主要观察 budget_match 打分行为",
+    "expected_status": "ok",
+    "request": {
+      "city": "南京",
+      "start_date": "2026-06-06",
+      "end_date": "2026-06-06",
+      "travel_days": 1,
+      "transportation": "公共交通",
+      "accommodation": "无需住宿",
+      "preferences": [
+        "历史文化"
+      ],
+      "free_text_input": "尽量低成本",
+      "max_budget": 500,
+      "budget_per_day": 500,
+      "daily_start_time": "10:00",
+      "daily_end_time": "18:00",
+      "max_walking_time": 30,
+      "min_rest_time": 15,
+      "avoid_rush_hour": false,
+      "max_attractions_per_day": 2
+    }
+  },
+  {
+    "case_id": "TC06",
+    "title": "时间窗口极窄（高冲突）",
+    "note": "时间冲突场景：主要拉低 schedule_quality",
+    "expected_status": "ok",
+    "request": {
+      "city": "西安",
+      "start_date": "2026-05-20",
+      "end_date": "2026-05-21",
+      "travel_days": 2,
+      "transportation": "公共交通",
+      "accommodation": "舒适型酒店",
+      "preferences": [
+        "历史文化",
+        "美食"
+      ],
+      "free_text_input": "每天只安排半天",
+      "max_budget": 2400,
+      "budget_per_day": 1200,
+      "daily_start_time": "10:30",
+      "daily_end_time": "13:00",
+      "max_walking_time": 20,
+      "min_rest_time": 20,
+      "avoid_rush_hour": true,
+      "max_attractions_per_day": 2
+    }
+  },
+  {
+    "case_id": "TC07",
+    "title": "偏好空值冷启动（3天）",
+    "note": "冷启动场景：无 preferences，观察 diversity 与 fit 的回退逻辑",
+    "expected_status": "ok",
+    "request": {
+      "city": "广州",
+      "start_date": "2026-08-15",
+      "end_date": "2026-08-17",
+      "travel_days": 3,
+      "transportation": "公共交通",
+      "accommodation": "经济型酒店",
+      "preferences": [],
+      "free_text_input": "",
+      "max_budget": 3000,
+      "budget_per_day": 1000,
+      "daily_start_time": "09:00",
+      "daily_end_time": "21:00",
+      "max_walking_time": 30,
+      "min_rest_time": 15,
+      "avoid_rush_hour": false,
+      "max_attractions_per_day": 4
+    }
+  },
+  {
+    "case_id": "TC08",
+    "title": "负例（应校验失败）",
+    "note": "负例：budget_per_day * travel_days > max_budget，预期请求校验失败",
+    "expected_status": "request_invalid",
+    "request": {
+      "city": "重庆",
+      "start_date": "2026-10-01",
+      "end_date": "2026-10-03",
+      "travel_days": 3,
+      "transportation": "公共交通",
+      "accommodation": "经济型酒店",
+      "preferences": [
+        "夜景"
+      ],
+      "free_text_input": "预算很紧",
+      "max_budget": 3000,
+      "budget_per_day": 1200,
+      "daily_start_time": "09:00",
+      "daily_end_time": "21:00",
+      "max_walking_time": 30,
+      "min_rest_time": 15,
+      "avoid_rush_hour": false,
+      "max_attractions_per_day": 4
+    }
+  }
+]

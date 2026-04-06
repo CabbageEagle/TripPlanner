@@ -1,6 +1,8 @@
 """LangGraph 节点函数定义"""
 
 from typing import Dict, Any, Literal
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from .graph_state import TripPlannerState
@@ -19,6 +21,47 @@ def create_llm():
         temperature=0.7
     )
 
+def _build_hard_restraints_block(state: TripPlannerState)->str:
+    request = state["request"]
+
+    must_rules = [
+        f"每日景点数量必须 <= {request.max_attractions_per_day}。",
+        f"相邻景点或活动之间必须预留 >= {request.min_rest_time} 分钟休息或机动时间。",
+        f"每天行程时间必须在 {request.daily_start_time} - {request.daily_end_time} 内闭合，禁止越界。",
+    ]
+
+    if request.accommodation:
+        if "无需住宿" in str(request.accommodation):
+            must_rules.append("住宿约束：本次行程为“无需住宿”，必须不推荐酒店，且酒店预算必须为 0。")
+        else:
+            must_rules.append(f"住宿约束：住宿类型必须匹配“{request.accommodation}”，不得擅自升级或替换档位。")
+
+    if request.max_budget is not None:
+        must_rules.append(f"总预算必须 <= {request.max_budget} 元。")
+    if request.budget_per_day is not None:
+        must_rules.append(f"单日预算必须 <= {request.budget_per_day} 元。")
+    if request.max_walking_time is not None:
+        must_rules.append(f"单次步行时长必须 <= {request.max_walking_time} 分钟。")
+
+    prefer_rules = []
+    if request.avoid_rush_hour:
+        prefer_rules.append("尽量避开早晚高峰时段安排跨区交通。")
+    if request.free_text_input:
+        prefer_rules.append(f"尽量满足用户附加偏好：{request.free_text_input}")
+
+    must_text = "\n".join(f"- {item}" for item in must_rules)
+    prefer_text = "\n".join(f"- {item}" for item in prefer_rules) if prefer_rules else "- 无"
+
+    return f"""[HARD_CONSTRAINTS | 最高优先级]
+你必须先满足 MUST，再考虑 PREFER。任何 MUST 不得被弱化、忽略或与其他目标权衡。
+
+MUST:
+{must_text}
+
+PREFER:
+{prefer_text}
+"""
+
 
 def search_attractions_node(state: TripPlannerState) -> Dict[str, Any]:
     """景点搜索节点"""
@@ -26,9 +69,10 @@ def search_attractions_node(state: TripPlannerState) -> Dict[str, Any]:
     
     request = state["request"]
     llm = create_llm()
-    
+    hard_restraints_block = _build_hard_restraints_block(state)
+    inferred_preferences = state.get("inferred_preferences", "")
     # 构建系统提示词
-    system_prompt = """你是景点搜索专家。请根据用户的城市和偏好，生成详细的景点列表。
+    system_prompt = hard_restraints_block + """你是景点搜索专家。请根据用户的城市和偏好，生成详细的景点列表。
 
 返回格式（JSON）:
 ```json
@@ -56,7 +100,7 @@ def search_attractions_node(state: TripPlannerState) -> Dict[str, Any]:
     keywords = ', '.join(request.preferences) if request.preferences else "热门景点"
     user_query = f"""请为{request.city}推荐适合{request.travel_days}天旅行的景点。
     
-用户偏好: {keywords}
+用户偏好: 结合用户新旧偏好，新偏好为主，旧偏好为辅。用户旧偏好：{inferred_preferences} 用户新偏好：{keywords}
 旅行天数: {request.travel_days}天
 
 请返回至少{request.travel_days * 2}个景点的JSON列表。"""
@@ -381,10 +425,12 @@ def schedule_plan_node(state: TripPlannerState) -> Dict[str, Any]:
         return {
             "schedule_applied": False,
             "schedule_notes": ["排程跳过: final_plan 非结构化数据"],
+            "days_to_reschedule": None,
             "current_step": "schedule_skipped"
         }
 
     schedule_retry_count = state.get("schedule_retry_count", 0)
+    requested_indexes = state.get("days_to_reschedule")
 
     cfg = ScheduleConfig(
         daily_start_time=request.daily_start_time or "09:00",
@@ -400,24 +446,56 @@ def schedule_plan_node(state: TripPlannerState) -> Dict[str, Any]:
         return {
             "schedule_applied": False,
             "schedule_notes": ["排程跳过: days 字段不是列表"],
+            "days_to_reschedule": None,
             "current_step": "schedule_skipped"
         }
 
+    if isinstance(requested_indexes, list) and requested_indexes:
+        target_indexes = sorted(
+            {
+                idx
+                for idx in requested_indexes
+                if isinstance(idx, int) and 0 <= idx < len(days)
+            }
+        )
+    else:
+        target_indexes = list(range(len(days)))
+
     warnings: list[str] = []
     schedule_failed = False
-    scheduled_days: list[dict[str, Any]] = []
-    for idx, day in enumerate(days):
-        if not isinstance(day, dict):
-            scheduled_days.append(day)
-            continue
-        try:
-            scheduled_day, day_warnings = schedule_day_plan(day, cfg)
-            scheduled_days.append(scheduled_day)
-            warnings.extend([f"第{idx + 1}天: {warning}" for warning in day_warnings])
-        except Exception as exc:
-            schedule_failed = True
-            warnings.append(f"第{idx + 1}天排程失败: {exc}")
-            scheduled_days.append(day)
+    scheduled_days: list[Any] = list(days)
+
+    if not target_indexes:
+        return {
+            "final_plan": final_plan,
+            "schedule_applied": True,
+            "schedule_retry_count": schedule_retry_count,
+            "schedule_notes": [],
+            "days_to_reschedule": None,
+            "current_step": "plan_scheduled"
+        }
+
+    worker_count = max(1, min(4, len(target_indexes)))
+    future_map: dict[Any, int] = {}
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        for idx in target_indexes:
+            day = days[idx]
+            if not isinstance(day, dict):
+                warnings.append(f"第{idx + 1}天排程跳过: day 非字典结构")
+                continue
+            future = executor.submit(schedule_day_plan, day, cfg)
+            future_map[future] = idx
+
+        for future in as_completed(future_map):
+            idx = future_map[future]
+            try:
+                scheduled_day, day_warnings = future.result()
+                scheduled_days[idx] = scheduled_day
+                warnings.extend([f"第{idx + 1}天: {warning}" for warning in day_warnings])
+            except Exception as exc:
+                schedule_failed = True
+                warnings.append(f"第{idx + 1}天排程失败: {exc}")
+                scheduled_days[idx] = days[idx]
 
     final_plan["days"] = scheduled_days
     if warnings:
@@ -437,6 +515,7 @@ def schedule_plan_node(state: TripPlannerState) -> Dict[str, Any]:
         "schedule_applied": not schedule_failed,
         "schedule_retry_count": schedule_retry_count,
         "schedule_notes": warnings,
+        "days_to_reschedule": None,
         "current_step": "plan_scheduled"
     }
 
@@ -558,99 +637,290 @@ def verify_plan_node(state: TripPlannerState) -> Dict[str, Any]:
         }
 
 
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    """从模型文本中提取 JSON 对象，提取失败时返回 None。"""
+    if not text:
+        return None
+    try:
+        if "```json" in text:
+            start = text.find("```json") + 7
+            end = text.find("```", start)
+            payload = text[start:end].strip()
+        elif "```" in text:
+            start = text.find("```") + 3
+            end = text.find("```", start)
+            payload = text[start:end].strip()
+        elif "{" in text and "}" in text:
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            payload = text[start:end]
+        else:
+            return None
+        data = json.loads(payload)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _build_fallback_day(request: Any, day_index: int) -> dict[str, Any]:
+    """当局部修复失败时，构造最小可用的单天行程兜底结构。"""
+    base_date = datetime.strptime(request.start_date, "%Y-%m-%d") + timedelta(days=day_index)
+    date_str = base_date.strftime("%Y-%m-%d")
+    city = request.city
+    accommodation = request.accommodation
+    return {
+        "date": date_str,
+        "day_index": day_index,
+        "description": f"第{day_index + 1}天轻量行程（自动兜底）",
+        "transportation": request.transportation,
+        "accommodation": accommodation,
+        "hotel": None if "无需住宿" in str(accommodation) else {
+            "name": f"{city}标准{accommodation}",
+            "address": f"{city}市区",
+            "location": {"longitude": 0.0, "latitude": 0.0},
+            "price_range": "",
+            "rating": "",
+            "distance": "",
+            "type": accommodation,
+            "estimated_cost": 0,
+        },
+        "attractions": [
+            {
+                "name": f"{city}核心景点A",
+                "address": f"{city}市区",
+                "location": {"longitude": 0.0, "latitude": 0.0},
+                "visit_duration": 90,
+                "description": "自动补全景点A",
+                "category": "景点",
+                "ticket_price": 0,
+            },
+            {
+                "name": f"{city}核心景点B",
+                "address": f"{city}市区",
+                "location": {"longitude": 0.0, "latitude": 0.0},
+                "visit_duration": 90,
+                "description": "自动补全景点B",
+                "category": "景点",
+                "ticket_price": 0,
+            },
+        ],
+        "meals": [
+            {"type": "breakfast", "name": "早餐", "description": "自动补全早餐", "estimated_cost": 0},
+            {"type": "lunch", "name": "午餐", "description": "自动补全午餐", "estimated_cost": 0},
+            {"type": "dinner", "name": "晚餐", "description": "自动补全晚餐", "estimated_cost": 0},
+        ],
+    }
+
+
+def _rebuild_budget(plan: dict[str, Any]) -> None:
+    """根据当前日程重建预算汇总，避免缺失预算字段导致重复修复。"""
+    days = plan.get("days")
+    if not isinstance(days, list):
+        return
+
+    total_attractions = 0
+    total_hotels = 0
+    total_meals = 0
+    total_transportation = 0
+
+    for day in days:
+        if not isinstance(day, dict):
+            continue
+        for attraction in day.get("attractions", []) or []:
+            total_attractions += int(attraction.get("ticket_price", 0) or 0)
+        for meal in day.get("meals", []) or []:
+            total_meals += int(meal.get("estimated_cost", 0) or 0)
+        hotel = day.get("hotel") or {}
+        if isinstance(hotel, dict):
+            total_hotels += int(hotel.get("estimated_cost", 0) or 0)
+        for item in day.get("timeline", []) or []:
+            if isinstance(item, dict) and item.get("activity_type") == "transport":
+                total_transportation += int(item.get("cost", 0) or 0)
+
+    plan["budget"] = {
+        "total_attractions": total_attractions,
+        "total_hotels": total_hotels,
+        "total_meals": total_meals,
+        "total_transportation": total_transportation,
+        "total": total_attractions + total_hotels + total_meals + total_transportation,
+    }
+
+
+def _normalize_plan_days(plan: dict[str, Any], request: Any) -> None:
+    """将 days 结构标准化为请求天数，优先减少全局重生。"""
+    days = plan.get("days")
+    if not isinstance(days, list):
+        days = []
+        plan["days"] = days
+
+    if len(days) > request.travel_days:
+        plan["days"] = days[:request.travel_days]
+        days = plan["days"]
+
+    while len(days) < request.travel_days:
+        days.append(_build_fallback_day(request, len(days)))
+
+    for idx, day in enumerate(days):
+        if not isinstance(day, dict):
+            days[idx] = _build_fallback_day(request, idx)
+            continue
+        day["day_index"] = idx
+        if "date" not in day:
+            base_date = datetime.strptime(request.start_date, "%Y-%m-%d") + timedelta(days=idx)
+            day["date"] = base_date.strftime("%Y-%m-%d")
+
+
+def _collect_failed_day_indexes(violations: list[dict[str, Any]], day_count: int) -> list[int]:
+    """从校验结果中提取需要局部修复的天索引。"""
+    indexes: set[int] = set()
+    for violation in violations:
+        idx = violation.get("day_index")
+        if isinstance(idx, int) and 0 <= idx < day_count:
+            indexes.add(idx)
+    return sorted(indexes)
+
+
 def fix_plan_node(state: TripPlannerState) -> Dict[str, Any]:
-    """修复节点：根据校验问题精准修复计划"""
-    print("[GRAPH] 正在修复行程计划...")
-    
-    violations = state.get("violations", [])
+    """修复节点：仅修复失败天，避免整份计划全局回环。"""
+    print("[GRAPH] 正在局部修复失败天...")
+
+    violations = state.get("violations", []) or []
     final_plan = state.get("final_plan", {})
     request = state["request"]
     llm = create_llm()
-    
-    # 只提取可修复的 critical 或 high 级别问题
+
+    if not isinstance(final_plan, dict):
+        return {
+            "final_plan": final_plan,
+            "verify_count": state.get("verify_count", 0) + 1,
+            "days_to_reschedule": None,
+            "current_step": "plan_fixed_skipped",
+        }
+
+    # 仅处理可修复的 critical/high 问题，避免无意义回环。
     fixable_issues = [
-        v for v in violations 
+        v for v in violations
         if v.get("severity") in ["critical", "high"] and v.get("fixable", True)
     ]
-    
-    # 如果没有可修复问题，直接返回原计划
     if not fixable_issues:
         print("[GRAPH] 没有可修复的问题，保持原计划")
         return {
+            "final_plan": final_plan,
             "final_plan_raw": json.dumps(final_plan, ensure_ascii=False),
-            "current_step": "plan_fixed"
+            "verify_count": state.get("verify_count", 0) + 1,
+            "days_to_reschedule": None,
+            "current_step": "plan_fixed_skipped",
         }
-    
-    # 构建精准的修复指令，包含详细错误
+
+    working_plan = json.loads(json.dumps(final_plan, ensure_ascii=False))
+    _normalize_plan_days(working_plan, request)
+    day_count = len(working_plan.get("days", []) or [])
+    failed_day_indexes = _collect_failed_day_indexes(fixable_issues, day_count)
+    if not failed_day_indexes:
+        failed_day_indexes = list(range(day_count))
+
     issues_text = []
-    for i, v in enumerate(fixable_issues):
-        issue_line = f"{i+1}. {v['message']}"
-        
-        # 添加期望值和实际值
-        if 'expected' in v:
-            issue_line += f" (期望: {v.get('expected')}, 实际: {v.get('actual')})"
-        
-        # 添加详细错误列表
-        if 'details' in v and v['details']:
-            issue_line += "\n   详细问题:"
-            for detail in v['details']:
-                issue_line += f"\n   - {detail}"
-        
-        issues_text.append(issue_line)
-    
-    issues_text = "\n".join(issues_text)
-    
-    # 构建修复提示词 - 更精简和精准
-    system_prompt = f"""你是行程修复专家。请针对以下 {len(fixable_issues)} 个具体问题进行精准修复：
+    for i, issue in enumerate(fixable_issues):
+        line = f"{i + 1}. {issue.get('message', '未知问题')}"
+        if "expected" in issue:
+            line += f" (期望: {issue.get('expected')}, 实际: {issue.get('actual')})"
+        if issue.get("details"):
+            details = "\n".join(f"   - {detail}" for detail in issue.get("details", []))
+            line += f"\n   详细问题:\n{details}"
+        issues_text.append(line)
 
-**需要修复的问题：**
-{issues_text}
+    day_payload = [
+        working_plan["days"][idx]
+        for idx in failed_day_indexes
+        if 0 <= idx < day_count
+    ]
+    issues_block = "\n".join(issues_text)
+    hard_constraints_block = _build_hard_constraints_block(state)
 
-**修复规则：**
-1. 只修复列出的问题（特别注意补充缺失的字段）
-2. 保持其他部分完全不变
-3. 景点必须包含：name, description, location(含longitude/latitude), visit_duration, address
-4. 如果是天数问题，增加或减少相应天数的行程
-5. 确保修复后的计划完整有效
-6. 返回完整 JSON（不要省略任何部分）
+    system_prompt = f"""{hard_constraints_block}
 
-**原始需求回顾：**
-- 城市: {request.city}
-- 天数: {request.travel_days}天
-- 日期: {request.start_date} 至 {request.end_date}
-- 偏好: {', '.join(request.preferences) if request.preferences else '无'}
+你是行程局部修复专家。你只能修复给定的失败天，不要重写整份计划。
 
-返回完整的修复后 JSON:
+任务要求：
+1. 只输出需要替换的天，输出字段名必须是 patched_days。
+2. 每个 patched_day 必须包含 day_index，且 day_index 不能越界。
+3. 保持未失败天完全不变。
+4. 必须修复以下问题：
+{issues_block}
+
+返回 JSON：
 ```json
 {{
-  "city": "...",
-  "start_date": "...",
-  "end_date": "...",
-  "days": [...],
-  "weather_info": [...],
-  "overall_suggestions": "...",
-  "budget": {{...}}
+  "patched_days": [
+    {{
+      "day_index": 0,
+      "date": "YYYY-MM-DD",
+      "description": "...",
+      "transportation": "...",
+      "accommodation": "...",
+      "hotel": {{...}},
+      "attractions": [...],
+      "meals": [...]
+    }}
+  ]
 }}
 ```
 """
-    
-    user_query = f"当前计划:\n{json.dumps(final_plan, ensure_ascii=False, indent=2)}"
-    
-    # 调用 LLM 修复
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_query)
-    ]
-    
-    response = llm.invoke(messages)
-    fixed_plan_raw = response.content
-    
-    print(f"[GRAPH] 修复完成: {len(fixed_plan_raw)} 字符")
-    
+
+    user_query = (
+        f"失败天索引: {failed_day_indexes}\n"
+        f"仅修复这些天，其他天不要输出。\n"
+        f"失败天原始数据:\n{json.dumps(day_payload, ensure_ascii=False, indent=2)}"
+    )
+
+    patched_indexes: list[int] = []
+    try:
+        response = llm.invoke(
+            [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_query),
+            ]
+        )
+        payload = _extract_json_object(str(response.content))
+        patched_days = payload.get("patched_days", []) if isinstance(payload, dict) else []
+
+        if isinstance(patched_days, list):
+            for item in patched_days:
+                if not isinstance(item, dict):
+                    continue
+                idx = item.get("day_index")
+                if not isinstance(idx, int) or idx < 0 or idx >= day_count:
+                    continue
+                item["day_index"] = idx
+                working_plan["days"][idx] = item
+                patched_indexes.append(idx)
+    except Exception as exc:
+        print(f"[GRAPH] 局部修复调用失败，进入兜底: {exc}")
+
+    # 若模型未成功返回有效补丁，使用兜底填充失败天，确保不再整份回环。
+    if not patched_indexes:
+        for idx in failed_day_indexes:
+            if 0 <= idx < day_count:
+                working_plan["days"][idx] = _build_fallback_day(request, idx)
+                patched_indexes.append(idx)
+
+    _normalize_plan_days(working_plan, request)
+    _rebuild_budget(working_plan)
+
+    warnings = working_plan.get("warnings")
+    if not isinstance(warnings, list):
+        warnings = []
+    warnings.append(f"局部修复: 已替换 {len(set(patched_indexes))} 天行程")
+    working_plan["warnings"] = _dedupe_text_list(warnings)
+
+    print(f"[GRAPH] 局部修复完成: 替换 {len(set(patched_indexes))} 天")
+
     return {
-        "final_plan_raw": fixed_plan_raw,
-        "verify_count": state.get("verify_count", 0) + 1,  # 修复后增加计数
-        "current_step": "plan_fixed"
+        "final_plan": working_plan,
+        "final_plan_raw": json.dumps(working_plan, ensure_ascii=False),
+        "days_to_reschedule": sorted(set(patched_indexes)),
+        "verify_count": state.get("verify_count", 0) + 1,
+        "current_step": "plan_fixed_partial",
     }
 
 

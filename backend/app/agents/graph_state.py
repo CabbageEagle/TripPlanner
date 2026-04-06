@@ -27,6 +27,7 @@ class TripPlannerState(TypedDict):
     schedule_applied: bool
     schedule_retry_count: int
     schedule_notes: list[str]
+    days_to_reschedule: Optional[list[int]]
     
     # 控制流
     current_step: str

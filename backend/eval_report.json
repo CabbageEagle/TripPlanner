@@ -1,0 +1,325 @@
+{
+  "judge_mode": "llm",
+  "source": "agent",
+  "strict_llm_judge": true,
+  "stopped_early": false,
+  "rows": [
+    {
+      "case_id": "TC01",
+      "status": "ok",
+      "source": "agent",
+      "generation_seconds": 392.23,
+      "evaluation_mode": "llm",
+      "overall_score": 7.8,
+      "scores": {
+        "schedule_quality": 8.0,
+        "budget_match": 7.0,
+        "attraction_diversity": 7.0,
+        "completeness": 9.0,
+        "requirement_fit": 8.0
+      },
+      "summary": "行程安排合理，景点选择契合历史文化与美食需求，但存在南锣鼓巷重复及总预算计算偏低的问题。",
+      "issues": [
+        {
+          "dimension_key": "attraction_diversity",
+          "severity": "medium",
+          "evidence": "Day 1 和 Day 3 均安排了 '南锣鼓巷' 作为景点。",
+          "suggestion": "建议将 Day 3 下午的南锣鼓巷替换为什刹海或国家博物馆，以丰富行程体验。"
+        },
+        {
+          "dimension_key": "budget_match",
+          "severity": "medium",
+          "evidence": "Budget summary 中 total 为 3126，但明细求和为 3126 (2250+600+126+150)，低于 max_budget 4200 且未包含所有 daily_cost 计算。",
+          "suggestion": "建议复核预算明细，确保每日 cost 总和与总预算计算一致，并明确余额使用计划。"
+        },
+        {
+          "dimension_key": "schedule_quality",
+          "severity": "low",
+          "evidence": "Day 2 下午 15:50 结束牛街游览至 18:00 晚餐之间有约 2 小时的空白。",
+          "suggestion": "建议填补该时段活动，如增加王府井步行街购物或安排休息。"
+        }
+      ]
+    },
+    {
+      "case_id": "TC02",
+      "status": "ok",
+      "source": "agent",
+      "generation_seconds": 938.54,
+      "evaluation_mode": "llm",
+      "overall_score": 5.85,
+      "scores": {
+        "schedule_quality": 3.0,
+        "budget_match": 4.0,
+        "attraction_diversity": 9.0,
+        "completeness": 8.0,
+        "requirement_fit": 6.0
+      },
+      "summary": "行程景点丰富且符合亲子需求，但因交通时间估算严重失真导致时间冲突频发，同时总预算大幅超支。",
+      "issues": [
+        {
+          "dimension_key": "schedule_quality",
+          "severity": "critical",
+          "evidence": "第5天安排从野生动物园（浦东）前往海昌海洋公园（临港），距离约40公里，timeline中仅预留20分钟交通时间，且行程在20:00后仍未结束。",
+          "suggestion": "7月出行应增加交通时间预估，第5天建议删除海昌海洋公园，改为轻量级行程，确保在17:00-18:00间结束。"
+        },
+        {
+          "dimension_key": "budget_match",
+          "severity": "critical",
+          "evidence": "用户设定最大预算9000元，行程预算总额为10794元，严重超支约19%。",
+          "suggestion": "需更换酒店为更低档次（如经济型酒店），或减少迪士尼等高门票景点的天数以控制预算。"
+        },
+        {
+          "dimension_key": "schedule_quality",
+          "severity": "high",
+          "evidence": "第4天欢乐谷和第5天海昌海洋公园均未在timeline中排入，且warnings明确提示超过当天结束时间。",
+          "suggestion": "优化每日景点数量，严格遵守max_attractions_per_day为3的限制，并确保行程在daily_end_time之前结束。"
+        },
+        {
+          "dimension_key": "requirement_fit",
+          "severity": "medium",
+          "evidence": "第2天迪士尼行程从10:20持续至18:20，仅午餐短暂休息，不符合用户明确要求的'午休时间要预留'和'避免太晚'。",
+          "suggestion": "迪士尼行程应安排中午回酒店或园区内长时间休息，缩短下午游园时间，避免儿童过度疲劳。"
+        },
+        {
+          "dimension_key": "completeness",
+          "severity": "medium",
+          "evidence": "多个景点的opening_hours字段显示'未知'，且timeline中未明确体现具体的午休时间段。",
+          "suggestion": "补充景点开放时间信息，并在timeline中显式标注'午休'时段。"
+        }
+      ]
+    },
+    {
+      "case_id": "TC03",
+      "status": "ok",
+      "source": "agent",
+      "generation_seconds": 223.16,
+      "evaluation_mode": "llm",
+      "overall_score": 5.55,
+      "scores": {
+        "schedule_quality": 4.0,
+        "budget_match": 8.0,
+        "attraction_diversity": 6.0,
+        "completeness": 5.0,
+        "requirement_fit": 5.0
+      },
+      "summary": "行程满足自然风光与咖啡偏好，预算控制良好，但存在时间冲突导致未完成全部安排，且预算计算不一致。",
+      "issues": [
+        {
+          "dimension_key": "schedule_quality",
+          "severity": "high",
+          "evidence": "warnings 字段提示 '超过当天结束时间，后续景点未排：满觉陇'，且满觉陇缺少具体的 visit_start_time 和 visit_end_time。",
+          "suggestion": "优化景点停留时间或减少交通时间，确保所有景点能在 19:00 前安排完毕并补全满觉陇的时间段。"
+        },
+        {
+          "dimension_key": "budget_match",
+          "severity": "medium",
+          "evidence": "days[0].total_cost 为 80，但 days[0].meals 中的早餐(30)、午餐(80)、晚餐(100)合计应为 210。",
+          "suggestion": "修正单日总成本计算逻辑，使其与各项消费明细总和保持一致。"
+        },
+        {
+          "dimension_key": "completeness",
+          "severity": "medium",
+          "evidence": "部分关键字段如 opening_hours 为 '未知'，budget_breakdown 和 budget_usage 为 null。",
+          "suggestion": "补充完整的景点开放时间，并提供详细的预算细分及使用比例数据。"
+        },
+        {
+          "dimension_key": "requirement_fit",
+          "severity": "low",
+          "evidence": "虽然行程包含咖啡店元素（在景点描述中提及），但并未作为独立的 POI 或活动在行程列表中体现。",
+          "suggestion": "建议将明确的咖啡店休息时段加入 timeline，以更直观地满足用户偏好。"
+        }
+      ]
+    },
+    {
+      "case_id": "TC04",
+      "status": "ok",
+      "source": "agent",
+      "generation_seconds": 419.01,
+      "evaluation_mode": "llm",
+      "overall_score": 6.85,
+      "scores": {
+        "schedule_quality": 6.0,
+        "budget_match": 10.0,
+        "attraction_diversity": 6.0,
+        "completeness": 7.0,
+        "requirement_fit": 5.0
+      },
+      "summary": "行程预算控制优秀且时间线较为连贯，但严重违背用户约束，景点重复率高，且存在未完全排入日程的情况。",
+      "issues": [
+        {
+          "dimension_key": "schedule_quality",
+          "severity": "high",
+          "evidence": "第 5 天的‘成都远洋太古里’被列在景点中，但 timeline 仅截止到 19:30 的晚餐，未包含该景点的具体游览时间段；系统提示‘超过当天结束时间’。",
+          "suggestion": "优化第 5 天的行程安排，删减前序活动时间或减少景点数量，确保‘成都远洋太古里’能被完整排入 21:00 前的时间线中。"
+        },
+        {
+          "dimension_key": "requirement_fit",
+          "severity": "high",
+          "evidence": "用户明确要求‘max_attractions_per_day’: 2，但第 1 天、第 3 天、第 5 天、第 6 天、第 7 天均安排了 3 个景点。",
+          "suggestion": "严格遵守用户约束，将每日景点数量调整为 2 个以内，可将部分景点作为‘备选’或‘自由活动’安排。"
+        },
+        {
+          "dimension_key": "attraction_diversity",
+          "severity": "medium",
+          "evidence": "‘春熙路’在第 1、4、7 天重复出现；‘人民公园’在第 3、7 天重复出现；‘成都远洋太古里’在第 1、5 天重复出现；‘宽窄巷子’在第 3、6 天重复出现。",
+          "suggestion": "替换重复景点为成都其他特色区域（如杜甫草堂、青羊宫、东湖公园等），丰富旅行体验的多样性。"
+        },
+        {
+          "dimension_key": "requirement_fit",
+          "severity": "medium",
+          "evidence": "用户备注‘安排1天轻松行程’，虽然第 4 天标注为轻松漫游日，但仍然安排了文殊院、东郊记忆和春熙路 3 个景点，且全天活动时长接近 10 小时，轻松度不足。",
+          "suggestion": "在轻松日减少景点数量至 1-2 个，增加茶馆休息或自由行街的时间，真正做到节奏放缓。"
+        },
+        {
+          "dimension_key": "completeness",
+          "severity": "medium",
+          "evidence": "第 6 天的 description 描述‘夜晚体验九眼桥酒吧文化’，但在 timeline 中九眼桥被安排在 13:20-15:20，下午游览而非夜晚。",
+          "suggestion": "根据描述调整时间安排，将九眼桥的游览时间调整至晚上，以匹配‘感受夜生活’的行程描述。"
+        }
+      ]
+    },
+    {
+      "case_id": "TC05",
+      "status": "ok",
+      "source": "agent",
+      "generation_seconds": 220.5,
+      "evaluation_mode": "llm",
+      "overall_score": 4.7,
+      "scores": {
+        "schedule_quality": 3.0,
+        "budget_match": 2.0,
+        "attraction_diversity": 9.0,
+        "completeness": 5.0,
+        "requirement_fit": 5.0
+      },
+      "summary": "行程虽然景点选择符合历史主题，但时间安排严重不完整，时间逻辑存在矛盾，且预算计算混乱，包含不必要的住宿费用。",
+      "issues": [
+        {
+          "dimension_key": "schedule_quality",
+          "severity": "high",
+          "evidence": "行程在 14:10 结束（前往南京博物院后未安排后续活动），但用户要求结束时间为 18:00，且警告信息提示‘超过当天结束时间，后续景点未排：南京博物院’。",
+          "suggestion": "请补全 14:10 至 18:00 之间的行程，将南京博物院和夫子庙的具体时间节点安排进时间轴，确保覆盖用户要求的游玩时段。"
+        },
+        {
+          "dimension_key": "schedule_quality",
+          "severity": "medium",
+          "evidence": "总时长计算显示 total_duration 为 220 分钟，仅约 3.6 小时，但实际景点耗时（120+240+120）远超此数值，且 18:00 结束时间与‘夜晚漫步夫子庙’的描述冲突。",
+          "suggestion": "修正时间计算逻辑，调整景点描述以符合 18:00 结束的时间约束，或修改建议结束时间以匹配夜晚游览需求。"
+        },
+        {
+          "dimension_key": "budget_match",
+          "severity": "high",
+          "evidence": "请求明确设定‘无需住宿’，但行程包含酒店推荐且预算中计入 250 元酒店费用（total_hotels: 250），导致 total 计算为 460 元。",
+          "suggestion": "移除酒店相关推荐及费用，重新计算总预算。仅保留餐饮、交通及可能的门票费用。"
+        },
+        {
+          "dimension_key": "budget_match",
+          "severity": "medium",
+          "evidence": "预算结构不一致：餐饮明细合计 30+50+80=160 元，但 daily 层面的 total_cost 显示为 50 元，transportation 显示为 50 但 timeline 中无交通费用。",
+          "suggestion": "核对并统一各层级预算数据，确保明细总和与总额一致，且交通费用分配准确。"
+        },
+        {
+          "dimension_key": "completeness",
+          "severity": "medium",
+          "evidence": "部分关键字段缺失：南京博物院的 visit_start_time/visit_end_time 为空，opening_hours 为‘未知’。",
+          "suggestion": "补全所有景点的具体访问时间段和开放时间信息，以提高行程的可执行性。"
+        },
+        {
+          "dimension_key": "requirement_fit",
+          "severity": "high",
+          "evidence": "用户设定 max_attractions_per_day 为 2，但实际安排了 3 个景点（中山陵、南京博物院、夫子庙秦淮风光带）。",
+          "suggestion": "删减一个景点以符合用户‘每天最多 2 个景点’的限制，或确认用户是否接受调整。"
+        }
+      ]
+    },
+    {
+      "case_id": "TC06",
+      "status": "ok",
+      "source": "agent",
+      "generation_seconds": 245.76,
+      "evaluation_mode": "llm",
+      "overall_score": 4.75,
+      "scores": {
+        "schedule_quality": 1.0,
+        "budget_match": 5.0,
+        "attraction_diversity": 8.0,
+        "completeness": 8.0,
+        "requirement_fit": 2.0
+      },
+      "summary": "行程严重违反时间约束，核心景点未排入时间线且时间线存在逻辑断层，虽预算合理但实际可执行度极低。",
+      "issues": [
+        {
+          "dimension_key": "schedule_quality",
+          "severity": "critical",
+          "evidence": "第1天 timeline 在 12:50 结束，但用户要求 13:00 结束；第2天 timeline 存在 10:50 至 12:00 的空白断层，且仅安排了午餐，未展示兵马俑游览过程。",
+          "suggestion": "修正第2天时间线填补空白，并严格按照 10:30-13:00 时段规划活动。"
+        },
+        {
+          "dimension_key": "schedule_quality",
+          "severity": "critical",
+          "evidence": "第1天回民街和第2天兵马俑、大雁塔被列入 attractions 列表，但 warnings 明确指出'无法前往景点：回民街'及'后续景点未排：秦始皇兵马俑博物馆'。",
+          "suggestion": "将重要景点实际排入时间线，若时间不足则需删减景点或延长每日活动时间。"
+        },
+        {
+          "dimension_key": "requirement_fit",
+          "severity": "high",
+          "evidence": "用户明确要求'每天只安排半天'且设定了 10:30-13:00 的严格时间窗，但第2天行程试图在半天内完成市区往返临潼兵马俑（需约3小时以上车程+游览）及大雁塔，完全不可行。",
+          "suggestion": "将兵马俑安排至全天行程，或替换为市内距离较近的景点（如陕西历史博物馆）以符合半天时间限制。"
+        },
+        {
+          "dimension_key": "budget_match",
+          "severity": "medium",
+          "evidence": "每日预算上限 1200 元，但第2天酒店预计 580 元 + 餐饮 160 元 + 交通，虽总预算未超，但单日预算分配紧凑且与单日上限说明关系未明确验证。",
+          "suggestion": "核实单日预算分配是否符合 1200 元上限约束，特别是酒店费用占比。"
+        },
+        {
+          "dimension_key": "requirement_fit",
+          "severity": "medium",
+          "evidence": "用户偏好'美食'，第1天安排了回民街（虽未排入时间线），但第2天'临潼区特色餐厅'及'大雁塔附近餐厅'缺乏具体的美食亮点描述。",
+          "suggestion": "强化餐饮安排的具体性，明确列出推荐的特色菜肴。"
+        }
+      ]
+    },
+    {
+      "case_id": "TC07",
+      "status": "ok",
+      "source": "agent",
+      "generation_seconds": 342.88,
+      "evaluation_mode": "llm",
+      "overall_score": 8.1,
+      "scores": {
+        "schedule_quality": 6.0,
+        "budget_match": 8.0,
+        "attraction_diversity": 9.0,
+        "completeness": 10.0,
+        "requirement_fit": 8.0
+      },
+      "summary": "该行程涵盖了广州历史、现代、自然与美食等多种元素，预算控制良好且信息完整，但存在时间安排不合理与住宿类型不符的问题。",
+      "issues": [
+        {
+          "dimension_key": "schedule_quality",
+          "severity": "high",
+          "evidence": "第 1 天在 15:10 结束北京路游览后，无活动安排直至 18:00 晚餐，中间存在近 3 小时的空白期；第 2 天景点游览 13:25 结束，晚餐 18:00 开始，也有较长空窗期。",
+          "suggestion": "建议利用空闲时间增加附近景点（如大佛寺、石室圣心大教堂）或安排休息，保持时间线连贯。"
+        },
+        {
+          "dimension_key": "requirement_fit",
+          "severity": "medium",
+          "evidence": "用户要求住宿类型为“经济型酒店”，但第 3 天安排的“如家精选酒店”在 JSON 中标注为“经济型酒店”，估算价格 500 元且描述中包含“精选”，可能属于舒适型范畴，不符合严格的“经济型”定义。",
+          "suggestion": "请确认酒店等级，或将第 3 天酒店调整为价格在 300 元左右的标准经济型酒店。"
+        },
+        {
+          "dimension_key": "schedule_quality",
+          "severity": "low",
+          "evidence": "第 1 天早餐安排在“陶陶居早茶”但未出现在时间线中，导致行程衔接不完整。",
+          "suggestion": "将早餐活动补充至每日时间线（Timeline）中，确保日程逻辑闭环。"
+        }
+      ]
+    },
+    {
+      "case_id": "TC08",
+      "status": "request_invalid",
+      "error": "1 validation error for TripRequest\nbudget_per_day\n  Value error, 每日预算乘以天数不能超过总预算 [type=value_error, input_value=1200, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.12/v/value_error"
+    }
+  ]
+}

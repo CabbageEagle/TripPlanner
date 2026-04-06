@@ -1,0 +1,210 @@
+{
+  "judge_mode": "heuristic",
+  "source": "mock",
+  "strict_llm_judge": false,
+  "stopped_early": false,
+  "rows": [
+    {
+      "case_id": "TC01",
+      "status": "ok",
+      "source": "mock",
+      "generation_seconds": 0.0,
+      "evaluation_mode": "heuristic",
+      "overall_score": 7.94,
+      "scores": {
+        "schedule_quality": 8.8,
+        "budget_match": 5.0,
+        "attraction_diversity": 9.2,
+        "completeness": 10.0,
+        "requirement_fit": 6.0
+      },
+      "summary": "Heuristic judge result generated without external LLM call.",
+      "issues": [
+        {
+          "dimension_key": "requirement_fit",
+          "severity": "medium",
+          "evidence": "free_text constraints not reflected",
+          "suggestion": "Inject user free-text constraints into planning prompt and validation rules."
+        }
+      ]
+    },
+    {
+      "case_id": "TC02",
+      "status": "ok",
+      "source": "mock",
+      "generation_seconds": 0.0,
+      "evaluation_mode": "heuristic",
+      "overall_score": 6.59,
+      "scores": {
+        "schedule_quality": 8.8,
+        "budget_match": 2.0,
+        "attraction_diversity": 5.45,
+        "completeness": 10.0,
+        "requirement_fit": 6.0
+      },
+      "summary": "Heuristic judge result generated without external LLM call.",
+      "issues": [
+        {
+          "dimension_key": "budget_match",
+          "severity": "high",
+          "evidence": "budget deviation too high (total=3875.0, max_budget=9000.0)",
+          "suggestion": "Reduce expensive items or adjust accommodation/transport strategy."
+        },
+        {
+          "dimension_key": "attraction_diversity",
+          "severity": "medium",
+          "evidence": "preference coverage low (0/3)",
+          "suggestion": "Increase attractions explicitly matching user preference tags."
+        },
+        {
+          "dimension_key": "requirement_fit",
+          "severity": "medium",
+          "evidence": "free_text constraints not reflected",
+          "suggestion": "Inject user free-text constraints into planning prompt and validation rules."
+        }
+      ]
+    },
+    {
+      "case_id": "TC03",
+      "status": "ok",
+      "source": "mock",
+      "generation_seconds": 0.0,
+      "evaluation_mode": "heuristic",
+      "overall_score": 8.11,
+      "scores": {
+        "schedule_quality": 8.8,
+        "budget_match": 10.0,
+        "attraction_diversity": 5.05,
+        "completeness": 10.0,
+        "requirement_fit": 6.0
+      },
+      "summary": "Heuristic judge result generated without external LLM call.",
+      "issues": [
+        {
+          "dimension_key": "attraction_diversity",
+          "severity": "medium",
+          "evidence": "preference coverage low (0/2)",
+          "suggestion": "Increase attractions explicitly matching user preference tags."
+        },
+        {
+          "dimension_key": "requirement_fit",
+          "severity": "medium",
+          "evidence": "free_text constraints not reflected",
+          "suggestion": "Inject user free-text constraints into planning prompt and validation rules."
+        }
+      ]
+    },
+    {
+      "case_id": "TC04",
+      "status": "ok",
+      "source": "mock",
+      "generation_seconds": 0.0,
+      "evaluation_mode": "heuristic",
+      "overall_score": 7.94,
+      "scores": {
+        "schedule_quality": 8.8,
+        "budget_match": 5.0,
+        "attraction_diversity": 9.2,
+        "completeness": 10.0,
+        "requirement_fit": 6.0
+      },
+      "summary": "Heuristic judge result generated without external LLM call.",
+      "issues": [
+        {
+          "dimension_key": "requirement_fit",
+          "severity": "medium",
+          "evidence": "free_text constraints not reflected",
+          "suggestion": "Inject user free-text constraints into planning prompt and validation rules."
+        }
+      ]
+    },
+    {
+      "case_id": "TC05",
+      "status": "ok",
+      "source": "mock",
+      "generation_seconds": 0.0,
+      "evaluation_mode": "heuristic",
+      "overall_score": 7.49,
+      "scores": {
+        "schedule_quality": 7.3,
+        "budget_match": 5.0,
+        "attraction_diversity": 8.8,
+        "completeness": 10.0,
+        "requirement_fit": 6.0
+      },
+      "summary": "Heuristic judge result generated without external LLM call.",
+      "issues": [
+        {
+          "dimension_key": "schedule_quality",
+          "severity": "medium",
+          "evidence": "detected 1 potential schedule conflicts",
+          "suggestion": "Adjust activity sequence and add transport/rest buffer."
+        },
+        {
+          "dimension_key": "requirement_fit",
+          "severity": "medium",
+          "evidence": "free_text constraints not reflected",
+          "suggestion": "Inject user free-text constraints into planning prompt and validation rules."
+        }
+      ]
+    },
+    {
+      "case_id": "TC06",
+      "status": "ok",
+      "source": "mock",
+      "generation_seconds": 0.0,
+      "evaluation_mode": "heuristic",
+      "overall_score": 6.52,
+      "scores": {
+        "schedule_quality": 3.1,
+        "budget_match": 5.0,
+        "attraction_diversity": 9.2,
+        "completeness": 10.0,
+        "requirement_fit": 6.0
+      },
+      "summary": "Heuristic judge result generated without external LLM call.",
+      "issues": [
+        {
+          "dimension_key": "schedule_quality",
+          "severity": "medium",
+          "evidence": "day 0 attractions=3 exceeds limit=2",
+          "suggestion": "Reduce attractions per day or expand available time window."
+        },
+        {
+          "dimension_key": "schedule_quality",
+          "severity": "high",
+          "evidence": "detected 3 potential schedule conflicts",
+          "suggestion": "Adjust activity sequence and add transport/rest buffer."
+        },
+        {
+          "dimension_key": "requirement_fit",
+          "severity": "medium",
+          "evidence": "free_text constraints not reflected",
+          "suggestion": "Inject user free-text constraints into planning prompt and validation rules."
+        }
+      ]
+    },
+    {
+      "case_id": "TC07",
+      "status": "ok",
+      "source": "mock",
+      "generation_seconds": 0.0,
+      "evaluation_mode": "heuristic",
+      "overall_score": 7.76,
+      "scores": {
+        "schedule_quality": 8.8,
+        "budget_match": 5.0,
+        "attraction_diversity": 6.8,
+        "completeness": 10.0,
+        "requirement_fit": 8.0
+      },
+      "summary": "Heuristic judge result generated without external LLM call.",
+      "issues": []
+    },
+    {
+      "case_id": "TC08",
+      "status": "request_invalid",
+      "error": "1 validation error for TripRequest\nbudget_per_day\n  Value error, 每日预算乘以天数不能超过总预算 [type=value_error, input_value=1200, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.12/v/value_error"
+    }
+  ]
+}

@@ -76,8 +76,8 @@ class LangGraphTripPlanner:
             }
         )
         
-        # 修复后重新解析
-        workflow.add_edge("fix_plan", "parse_plan")
+        # 修复后直接重新排程和复验，避免整份计划重新解析回环
+        workflow.add_edge("fix_plan", "schedule_plan")
         
         # 错误处理直接结束
         workflow.add_edge("error_handler", END)
@@ -122,6 +122,7 @@ class LangGraphTripPlanner:
                 "schedule_applied": False,
                 "schedule_retry_count": 0,
                 "schedule_notes": [],
+                "days_to_reschedule": None,
                 "current_step": "initialized",
                 "error": None
             }
