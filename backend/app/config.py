@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List
 
 from dotenv import load_dotenv
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 # Load environment variables from default shell environment first.
@@ -51,6 +52,20 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/trip_planner"
     database_echo: bool = False
+
+    @field_validator("debug", "rag_debug", "schedule_use_mcp_route", "database_echo", mode="before")
+    @classmethod
+    def parse_bool_like(cls, value):
+        """Accept shell-style truthy/falsy strings and tolerate release/dev labels."""
+        if isinstance(value, bool) or value is None:
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "y", "on", "debug", "dev", "development"}:
+                return True
+            if normalized in {"0", "false", "no", "n", "off", "release", "prod", "production"}:
+                return False
+        return value
 
     @property
     def openai_api_key(self) -> str:

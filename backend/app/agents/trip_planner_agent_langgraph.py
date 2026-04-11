@@ -5,15 +5,23 @@ from typing import Dict, Any
 from langgraph.graph import StateGraph, END
 from .graph_state import TripPlannerState
 from .graph_nodes import (
+    init_info_gathering_node,
+    info_gathering_agent_node,
     search_attractions_node,
     query_weather_node,
     search_hotels_node,
+    search_local_events_node,
+    estimate_transit_time_node,
+    merge_tool_result_node,
+    router_warning_node,
+    forced_exit_with_best_effort_node,
     plan_trip_node,
     parse_plan_node,
     schedule_plan_node,
     verify_plan_node,
     fix_plan_node,
     error_handler_node,
+    info_gathering_router,
     should_retry_parse,
     should_fix_or_end
 )
@@ -32,23 +40,51 @@ class LangGraphTripPlanner:
         workflow = StateGraph(TripPlannerState)
         
         # 添加节点
-        workflow.add_node("search_attractions", search_attractions_node)
-        workflow.add_node("query_weather", query_weather_node)
-        workflow.add_node("search_hotels", search_hotels_node)
+        workflow.add_node("init_info_gathering", init_info_gathering_node)
+        workflow.add_node("info_gathering_agent", info_gathering_agent_node)
+        workflow.add_node("search_attractions_tool", search_attractions_node)
+        workflow.add_node("query_weather_tool", query_weather_node)
+        workflow.add_node("search_hotels_tool", search_hotels_node)
+        workflow.add_node("search_local_events_tool", search_local_events_node)
+        workflow.add_node("estimate_transit_time_tool", estimate_transit_time_node)
+        workflow.add_node("merge_tool_result", merge_tool_result_node)
+        workflow.add_node("router_warning", router_warning_node)
+        workflow.add_node("forced_exit_with_best_effort", forced_exit_with_best_effort_node)
         workflow.add_node("plan_trip", plan_trip_node)
         workflow.add_node("parse_plan", parse_plan_node)
         workflow.add_node("schedule_plan", schedule_plan_node)
         workflow.add_node("verify_plan", verify_plan_node)
         workflow.add_node("fix_plan", fix_plan_node)
         workflow.add_node("error_handler", error_handler_node)
-        
+
         # 设置入口点
-        workflow.set_entry_point("search_attractions")
-        
-        # 添加边（定义工作流）
-        workflow.add_edge("search_attractions", "query_weather")
-        workflow.add_edge("query_weather", "search_hotels")
-        workflow.add_edge("search_hotels", "plan_trip")
+        workflow.set_entry_point("init_info_gathering")
+
+        # 信息搜集子图
+        workflow.add_edge("init_info_gathering", "info_gathering_agent")
+        workflow.add_conditional_edges(
+            "info_gathering_agent",
+            info_gathering_router,
+            {
+                "search_attractions_tool": "search_attractions_tool",
+                "query_weather_tool": "query_weather_tool",
+                "search_hotels_tool": "search_hotels_tool",
+                "search_local_events_tool": "search_local_events_tool",
+                "estimate_transit_time_tool": "estimate_transit_time_tool",
+                "router_warning": "router_warning",
+                "forced_exit_with_best_effort": "forced_exit_with_best_effort",
+                "plan_trip": "plan_trip",
+                "info_gathering_agent": "info_gathering_agent",
+            }
+        )
+        workflow.add_edge("search_attractions_tool", "merge_tool_result")
+        workflow.add_edge("query_weather_tool", "merge_tool_result")
+        workflow.add_edge("search_hotels_tool", "merge_tool_result")
+        workflow.add_edge("search_local_events_tool", "merge_tool_result")
+        workflow.add_edge("estimate_transit_time_tool", "merge_tool_result")
+        workflow.add_edge("merge_tool_result", "info_gathering_agent")
+        workflow.add_edge("router_warning", "info_gathering_agent")
+        workflow.add_edge("forced_exit_with_best_effort", "plan_trip")
         
         # 验证回环阶段
         workflow.add_edge("plan_trip", "parse_plan")
@@ -110,10 +146,42 @@ class LangGraphTripPlanner:
             # 初始化状态
             initial_state: TripPlannerState = {
                 "request": request,
+                "memory_summary": "",
+                "base_constraints": {},
                 "attractions_data": None,
                 "weather_data": None,
                 "hotel_data": None,
                 "inferred_preferences": inferred_preferences,
+                "sop_required": {
+                    "weather_required": True,
+                    "attractions_required": True,
+                    "hotels_required": False,
+                    "transit_required": False,
+                    "local_events_optional": False,
+                },
+                "sop_completed": {
+                    "weather_done": False,
+                    "attractions_done": False,
+                    "hotels_done": False,
+                    "transit_done": False,
+                },
+                "gathered_context": {
+                    "attractions": [],
+                    "weather": None,
+                    "hotels": [],
+                    "local_events": [],
+                    "transit_evidence": [],
+                },
+                "context_summary": "",
+                "tool_call_history": [],
+                "candidate_filter_notes": [],
+                "agent_output": None,
+                "ready_for_planning": False,
+                "loop_count": 0,
+                "max_loops": 5,
+                "router_warning": None,
+                "forced_exit": False,
+                "force_exit_reason": None,
                 "final_plan_raw": None,
                 "final_plan": None,
                 "violations": None,

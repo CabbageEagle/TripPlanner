@@ -6,7 +6,9 @@ from datetime import datetime, timedelta
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from .graph_state import TripPlannerState
+from .tools import get_capability_tool
 from ..config import get_settings
+from ..services.amap_service import get_amap_service
 from ..services.scheduler_service import ScheduleConfig, schedule_day_plan
 import json
 
@@ -20,6 +22,518 @@ def create_llm():
         base_url=settings.llm_base_url,
         temperature=0.7
     )
+
+
+def _get_capability_tool(tool_name: str):
+    """Resolve a capability tool from the shared registry."""
+    return get_capability_tool(tool_name)
+
+
+INFO_GATHERING_TOOL_NAMES = {
+    "search_attractions_tool",
+    "query_weather_tool",
+    "search_hotels_tool",
+    "search_local_events_tool",
+    "estimate_transit_time_tool",
+}
+
+LOCAL_EVENT_HINTS = ("展", "演出", "音乐", "亲子", "活动", "show", "live", "event")
+LOW_TRANSIT_HINTS = ("顺路", "不折腾", "老人", "小孩", "带娃", "轻松", "少走路")
+NO_HOTEL_HINTS = ("无需住宿", "无须住宿", "不住宿", "当天往返")
+
+
+def _request_wants_local_events(request: Any) -> bool:
+    trigger_hints = LOCAL_EVENT_HINTS + (
+        "展览",
+        "展会",
+        "演唱会",
+        "音乐会",
+        "音乐节",
+        "亲子游",
+        "儿童",
+        "剧场",
+        "话剧",
+        "脱口秀",
+        "concert",
+        "family",
+    )
+    preferences = " ".join(str(preference) for preference in (getattr(request, "preferences", []) or []))
+    free_text = str(getattr(request, "free_text_input", "") or "")
+    haystack = f"{preferences} {free_text}".lower()
+    return any(keyword.lower() in haystack for keyword in trigger_hints)
+
+
+def _iter_local_event_signal_texts(state: TripPlannerState) -> list[str]:
+    request = state["request"]
+    texts = [
+        " ".join(str(preference) for preference in (getattr(request, "preferences", []) or [])),
+        str(getattr(request, "free_text_input", "") or ""),
+        str(state.get("inferred_preferences") or ""),
+        str(state.get("memory_summary") or ""),
+    ]
+    return [text for text in texts if text.strip()]
+
+
+def _has_local_event_interest_signal(state: TripPlannerState) -> bool:
+    hints = (
+        "展",
+        "展览",
+        "展会",
+        "演出",
+        "演唱会",
+        "话剧",
+        "脱口秀",
+        "音乐",
+        "音乐会",
+        "音乐节",
+        "亲子",
+        "儿童",
+        "show",
+        "live",
+        "concert",
+        "family",
+    )
+    return any(any(hint.lower() in text.lower() for hint in hints) for text in _iter_local_event_signal_texts(state))
+
+
+def _has_slow_pace_signal(state: TripPlannerState) -> bool:
+    hints = LOW_TRANSIT_HINTS + ("慢游", "休闲", "悠闲", "citywalk")
+    return any(any(hint.lower() in text.lower() for hint in hints) for text in _iter_local_event_signal_texts(state))
+
+
+def _extract_local_event_interest_keywords(state: TripPlannerState) -> list[str]:
+    keyword_groups = {
+        "展览": ("展", "展览", "展会", "museum", "gallery"),
+        "演出": ("演出", "话剧", "脱口秀", "show", "live", "performance"),
+        "音乐": ("音乐", "演唱会", "音乐会", "音乐节", "concert"),
+        "亲子": ("亲子", "儿童", "带娃", "family", "kids"),
+    }
+    texts = _iter_local_event_signal_texts(state)
+    keywords: list[str] = []
+    for label, hints in keyword_groups.items():
+        if any(any(hint.lower() in text.lower() for hint in hints) for text in texts):
+            keywords.append(label)
+
+    if keywords:
+        return keywords
+
+    request = state["request"]
+    fallback_preferences = [str(item).strip() for item in (getattr(request, "preferences", []) or []) if str(item).strip()]
+    if fallback_preferences:
+        return fallback_preferences[:3]
+    return ["城市漫游"]
+
+
+def _get_local_event_activation_reason(state: TripPlannerState) -> str:
+    if _has_local_event_interest_signal(state):
+        return "interest_match"
+    if _has_slow_pace_signal(state):
+        return "slow_pace"
+    if _attractions_insufficient(state):
+        return "candidate_gap"
+    return "interest_match"
+
+
+def _minimum_attraction_candidates(request: Any) -> int:
+    travel_days = max(int(getattr(request, "travel_days", 1) or 1), 1)
+    return max(4, travel_days * 2)
+
+
+def _attractions_insufficient(state: TripPlannerState) -> bool:
+    gathered_context = state.get("gathered_context") or {}
+    attractions = [item for item in (gathered_context.get("attractions") or []) if isinstance(item, dict)]
+    return len(attractions) < _minimum_attraction_candidates(state["request"])
+
+
+def _should_search_local_events(state: TripPlannerState) -> bool:
+    gathered_context = state.get("gathered_context") or {}
+    if gathered_context.get("local_events"):
+        return False
+    return (
+        _has_local_event_interest_signal(state)
+        or _has_slow_pace_signal(state)
+        or _attractions_insufficient(state)
+    )
+
+
+def _default_sop_required(request: Any) -> dict[str, bool]:
+    accommodation = str(getattr(request, "accommodation", "") or "")
+    hotels_required = bool(accommodation) and not any(keyword in accommodation for keyword in NO_HOTEL_HINTS)
+    local_events_optional = _request_wants_local_events(request)
+    return {
+        "weather_required": True,
+        "attractions_required": True,
+        "hotels_required": hotels_required,
+        "transit_required": False,
+        "local_events_optional": local_events_optional,
+    }
+
+
+def _default_sop_completed() -> dict[str, bool]:
+    return {
+        "weather_done": False,
+        "attractions_done": False,
+        "hotels_done": False,
+        "transit_done": False,
+    }
+
+
+def _default_gathered_context() -> dict[str, Any]:
+    return {
+        "attractions": [],
+        "weather": None,
+        "hotels": [],
+        "local_events": [],
+        "transit_evidence": [],
+    }
+
+
+def _default_checklist_update(state: TripPlannerState) -> dict[str, bool]:
+    completed = state.get("sop_completed") or _default_sop_completed()
+    return {
+        "weather_done": bool(completed.get("weather_done")),
+        "attractions_done": bool(completed.get("attractions_done")),
+        "hotels_done": bool(completed.get("hotels_done")),
+        "transit_done": bool(completed.get("transit_done")),
+    }
+
+
+def _copy_gathered_context(state: TripPlannerState) -> dict[str, Any]:
+    current = state.get("gathered_context") or _default_gathered_context()
+    return {
+        "attractions": list(current.get("attractions") or []),
+        "weather": current.get("weather"),
+        "hotels": list(current.get("hotels") or []),
+        "local_events": list(current.get("local_events") or []),
+        "transit_evidence": list(current.get("transit_evidence") or []),
+    }
+
+
+def _model_to_dict(item: Any) -> dict[str, Any]:
+    if hasattr(item, "model_dump"):
+        return item.model_dump(mode="json")
+    if isinstance(item, dict):
+        return item
+    return dict(item)
+
+
+def _extract_json_array(text: str) -> list[dict[str, Any]]:
+    if not text:
+        return []
+
+    payload = text.strip()
+    try:
+        if "```json" in payload:
+            start = payload.find("```json") + 7
+            end = payload.find("```", start)
+            payload = payload[start:end].strip()
+        elif "```" in payload:
+            start = payload.find("```") + 3
+            end = payload.find("```", start)
+            payload = payload[start:end].strip()
+        elif "[" in payload and "]" in payload:
+            start = payload.find("[")
+            end = payload.rfind("]") + 1
+            payload = payload[start:end]
+        data = json.loads(payload)
+    except Exception:
+        return []
+
+    return [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []
+
+
+def _append_tool_history(
+    state: TripPlannerState,
+    *,
+    tool_name: str,
+    tool_input: dict[str, Any],
+    success: bool,
+    summary: str,
+    result_count: int = 0,
+    warning: str | None = None,
+) -> list[dict[str, Any]]:
+    history = list(state.get("tool_call_history") or [])
+    record = {
+        "tool_name": tool_name,
+        "tool_input": tool_input,
+        "success": success,
+        "summary": summary,
+        "result_count": result_count,
+    }
+    if warning:
+        record["warning"] = warning
+    history.append(record)
+    return history
+
+
+def _extract_region_tag(address: str) -> str:
+    for marker in ("区", "县", "市"):
+        idx = address.find(marker)
+        if idx > 0:
+            start = max(address.rfind(" ", 0, idx), address.rfind("省", 0, idx), address.rfind("市", 0, idx))
+            return address[start + 1 : idx + 1]
+    return ""
+
+
+def _has_fixed_time_local_events(state: TripPlannerState) -> bool:
+    context = state.get("gathered_context") or {}
+    local_events = context.get("local_events") or []
+    return any(
+        isinstance(item, dict)
+        and str(item.get("date") or "").strip()
+        and str(item.get("time_window") or "").strip()
+        for item in local_events
+    )
+
+
+def _derive_transit_required(state: TripPlannerState) -> bool:
+    request = state["request"]
+    free_text = str(getattr(request, "free_text_input", "") or "")
+    if any(keyword in free_text for keyword in LOW_TRANSIT_HINTS):
+        return True
+    if _has_fixed_time_local_events(state):
+        return True
+
+    context = state.get("gathered_context") or {}
+    attractions = context.get("attractions") or []
+    hotels = context.get("hotels") or []
+    region_tags = {
+        _extract_region_tag(str(item.get("address") or ""))
+        for item in [*attractions, *hotels]
+        if isinstance(item, dict)
+    }
+    region_tags.discard("")
+    return len(region_tags) >= 2
+
+
+def _build_transit_drop_targets(state: TripPlannerState) -> set[str]:
+    context = state.get("gathered_context") or {}
+    evidence = context.get("transit_evidence") or []
+    return {
+        str(item.get("destination_name") or "").strip()
+        for item in evidence
+        if isinstance(item, dict)
+        and item.get("decision") == "drop_candidate"
+        and str(item.get("destination_name") or "").strip()
+    }
+
+
+def _filter_planning_candidates(
+    state: TripPlannerState,
+    *,
+    attractions: list[dict[str, Any]],
+    local_events: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    drop_targets = _build_transit_drop_targets(state)
+    if not drop_targets:
+        return attractions, local_events
+
+    filtered_local_events = [
+        item for item in local_events if str(item.get("name") or "").strip() not in drop_targets
+    ]
+    filtered_attractions = [
+        item for item in attractions if str(item.get("name") or "").strip() not in drop_targets
+    ]
+    minimum_keep = max(2, int(getattr(state["request"], "travel_days", 1) or 1) + 1)
+    attractions_for_planning = filtered_attractions if len(filtered_attractions) >= minimum_keep else attractions
+    return attractions_for_planning, filtered_local_events
+
+
+def all_required_sop_completed(state: TripPlannerState) -> bool:
+    required = state.get("sop_required") or {}
+    completed = state.get("sop_completed") or {}
+    for required_key, completed_key in (
+        ("weather_required", "weather_done"),
+        ("attractions_required", "attractions_done"),
+        ("hotels_required", "hotels_done"),
+        ("transit_required", "transit_done"),
+    ):
+        if required.get(required_key) and not completed.get(completed_key):
+            return False
+    return True
+
+
+def _missing_required_steps(state: TripPlannerState) -> list[str]:
+    required = state.get("sop_required") or {}
+    completed = state.get("sop_completed") or {}
+    messages: list[str] = []
+    if required.get("attractions_required") and not completed.get("attractions_done"):
+        messages.append("景点信息尚未完成")
+    if required.get("weather_required") and not completed.get("weather_done"):
+        messages.append("天气信息尚未完成")
+    if required.get("hotels_required") and not completed.get("hotels_done"):
+        messages.append("酒店信息尚未完成")
+    if required.get("transit_required") and not completed.get("transit_done"):
+        messages.append("交通测算尚未完成")
+    return messages
+
+
+def _build_router_warning_message(state: TripPlannerState) -> str:
+    output = state.get("agent_output") or {}
+    missing_steps = _missing_required_steps(state)
+    action = output.get("action")
+
+    if action == "submit_context" and missing_steps:
+        return f"不能提前交卷：{'；'.join(missing_steps)}。"
+    if action == "call_tool" and output.get("tool_name") not in INFO_GATHERING_TOOL_NAMES:
+        return f"非法工具调用：{output.get('tool_name') or 'unknown'}。"
+    if action not in {"call_tool", "continue", "submit_context", None}:
+        return f"非法 agent action：{action}。"
+    if (
+        (state.get("sop_required") or {}).get("transit_required")
+        and not (state.get("sop_completed") or {}).get("transit_done")
+        and output.get("ready_for_planning") is True
+    ):
+        return "当前候选存在交通风险，但交通测算尚未完成。"
+    if missing_steps:
+        return f"仍有必查项未完成：{'；'.join(missing_steps)}。"
+    return "需要重新判断下一步动作。"
+
+
+def _build_forced_exit_reason(state: TripPlannerState) -> str:
+    loop_count = int(state.get("loop_count", 0))
+    max_loops = int(state.get("max_loops", 5))
+    missing_steps = _missing_required_steps(state)
+    history = state.get("tool_call_history") or []
+    called_tools = [str(item.get("tool_name")) for item in history if isinstance(item, dict) and item.get("tool_name")]
+    if missing_steps:
+        missing_text = "；".join(missing_steps)
+    else:
+        missing_text = "无必查项缺失"
+    tool_text = ", ".join(called_tools[-5:]) if called_tools else "无工具调用"
+    return f"信息搜集达到循环上限 {loop_count}/{max_loops}，未完成项：{missing_text}，最近工具调用：{tool_text}。"
+
+
+def _build_context_summary(state: TripPlannerState) -> str:
+    context = state.get("gathered_context") or _default_gathered_context()
+    weather = context.get("weather")
+    weather_count = len(weather) if isinstance(weather, list) else int(bool(weather))
+    parts = [
+        f"景点 {len(context.get('attractions') or [])} 个",
+        f"天气 {weather_count} 条",
+        f"酒店 {len(context.get('hotels') or [])} 个",
+        f"本地活动 {len(context.get('local_events') or [])} 个",
+        f"交通证据 {len(context.get('transit_evidence') or [])} 条",
+    ]
+    notes = list(state.get("candidate_filter_notes") or [])
+    if notes:
+        parts.append(f"筛选备注 {len(notes)} 条")
+    if state.get("router_warning"):
+        parts.append(f"警告: {state['router_warning']}")
+    if state.get("forced_exit"):
+        parts.append(f"熔断: {state.get('force_exit_reason') or 'best effort'}")
+    return "；".join(parts)
+
+
+def _tool_input_for_step(tool_name: str, state: TripPlannerState) -> dict[str, Any]:
+    request = state["request"]
+    if tool_name == "search_attractions_tool":
+        return {"city": request.city, "keywords": list(request.preferences or [])}
+    if tool_name == "query_weather_tool":
+        return {"city": request.city, "date_range": [request.start_date, request.end_date]}
+    if tool_name == "search_hotels_tool":
+        return {"city": request.city, "accommodation": request.accommodation}
+    if tool_name == "search_local_events_tool":
+        return {
+            "city": request.city,
+            "start_date": request.start_date,
+            "end_date": request.end_date,
+            "interest_keywords": _extract_local_event_interest_keywords(state),
+            "activation_reason": _get_local_event_activation_reason(state),
+            "travel_days": request.travel_days,
+            "daily_start_time": getattr(request, "daily_start_time", None),
+            "daily_end_time": getattr(request, "daily_end_time", None),
+        }
+    return {"city": request.city, "route_type": _infer_route_type(request.transportation)}
+
+
+
+
+
+def init_info_gathering_node(state: TripPlannerState) -> Dict[str, Any]:
+    request = state["request"]
+    gathered_context = _copy_gathered_context(state)
+    sop_required = _default_sop_required(request)
+    sop_required["transit_required"] = _derive_transit_required(
+        {
+            **state,
+            "gathered_context": gathered_context,
+            "sop_required": sop_required,
+        }
+    )
+    return {
+        "sop_required": sop_required,
+        "sop_completed": state.get("sop_completed") or _default_sop_completed(),
+        "gathered_context": gathered_context,
+        "context_summary": state.get("context_summary") or "",
+        "tool_call_history": list(state.get("tool_call_history") or []),
+        "candidate_filter_notes": list(state.get("candidate_filter_notes") or []),
+        "agent_output": state.get("agent_output"),
+        "ready_for_planning": bool(state.get("ready_for_planning", False)),
+        "loop_count": int(state.get("loop_count", 0)),
+        "max_loops": int(state.get("max_loops", 5)),
+        "router_warning": state.get("router_warning"),
+        "forced_exit": bool(state.get("forced_exit", False)),
+        "force_exit_reason": state.get("force_exit_reason"),
+        "memory_summary": state.get("memory_summary", ""),
+        "base_constraints": state.get("base_constraints", {}),
+        "current_step": "info_gathering_initialized",
+    }
+
+
+def info_gathering_agent_node(state: TripPlannerState) -> Dict[str, Any]:
+    sop_required = state.get("sop_required") or _default_sop_required(state["request"])
+    sop_completed = state.get("sop_completed") or _default_sop_completed()
+
+    next_tool: str | None = None
+    reason = "All mandatory information has been collected."
+
+    if sop_required.get("attractions_required") and not sop_completed.get("attractions_done"):
+        next_tool = "search_attractions_tool"
+        reason = "Need baseline attractions before planning."
+    elif sop_required.get("weather_required") and not sop_completed.get("weather_done"):
+        next_tool = "query_weather_tool"
+        reason = "Need weather to validate outdoor feasibility."
+    elif sop_required.get("hotels_required") and not sop_completed.get("hotels_done"):
+        next_tool = "search_hotels_tool"
+        reason = "User needs hotel options before planning."
+    elif sop_required.get("transit_required") and not sop_completed.get("transit_done"):
+        next_tool = "estimate_transit_time_tool"
+        reason = "Need transit evidence before submitting context."
+    elif _should_search_local_events(state):
+        next_tool = "search_local_events_tool"
+        reason = "Optional local events may improve the itinerary."
+
+    if next_tool is not None and state.get("loop_count", 0) < state.get("max_loops", 5):
+        output = {
+            "action": "call_tool",
+            "tool_name": next_tool,
+            "tool_input": _tool_input_for_step(next_tool, state),
+            "reasoning_summary": reason,
+            "ready_for_planning": False,
+            "checklist_update": _default_checklist_update(state),
+        }
+        return {
+            "agent_output": output,
+            "ready_for_planning": False,
+            "current_step": "info_gathering_decided",
+        }
+
+    ready = all_required_sop_completed(state)
+    output = {
+        "action": "submit_context" if ready else "continue",
+        "tool_name": None,
+        "tool_input": {},
+        "reasoning_summary": state.get("router_warning") or reason,
+        "ready_for_planning": ready,
+        "checklist_update": _default_checklist_update(state),
+    }
+    return {
+        "agent_output": output,
+        "ready_for_planning": ready,
+        "current_step": "info_gathering_decided",
+    }
+
 
 def _build_hard_restraints_block(state: TripPlannerState)->str:
     request = state["request"]
@@ -63,167 +577,419 @@ PREFER:
 """
 
 
+def _build_hard_constraints_block(state: TripPlannerState) -> str:
+    """Backward-compatible alias for older call sites."""
+    return _build_hard_restraints_block(state)
+
+
 def search_attractions_node(state: TripPlannerState) -> Dict[str, Any]:
-    """景点搜索节点"""
-    print("[GRAPH] 正在搜索景点...")
-    
+    """Search and normalize attraction candidates."""
+    print("[GRAPH] searching attractions...")
+
     request = state["request"]
-    llm = create_llm()
-    hard_restraints_block = _build_hard_restraints_block(state)
-    inferred_preferences = state.get("inferred_preferences", "")
-    # 构建系统提示词
-    system_prompt = hard_restraints_block + """你是景点搜索专家。请根据用户的城市和偏好，生成详细的景点列表。
+    tool_input = _tool_input_for_step("search_attractions_tool", state)
+    gathered_context = _copy_gathered_context(state)
+    sop_completed = dict(state.get("sop_completed") or _default_sop_completed())
+    warning: str | None = None
 
-返回格式（JSON）:
-```json
-[
-  {
-    "name": "景点名称",
-    "address": "详细地址",
-    "location": {"longitude": 116.397128, "latitude": 39.916527},
-    "visit_duration": 120,
-    "description": "景点详细描述",
-    "category": "景点类别",
-    "ticket_price": 60
-  }
-]
-```
+    attractions: list[dict[str, Any]] = []
+    try:
+        amap_service = get_amap_service()
+        keyword = " ".join(tool_input.get("keywords") or []) or "热门景点"
+        pois = amap_service.search_poi(keyword, request.city, citylimit=True)
+        attractions = [
+            {
+                "name": poi_dict.get("name", ""),
+                "address": poi_dict.get("address", ""),
+                "location": poi_dict.get("location"),
+                "visit_duration": 120,
+                "description": f"{poi_dict.get('name', '')}，适合作为 {request.city} 行程候选景点。",
+                "category": poi_dict.get("type", "景点"),
+                "ticket_price": 0,
+                "poi_id": poi_dict.get("id", ""),
+            }
+            for poi_dict in (_model_to_dict(item) for item in pois)
+            if poi_dict.get("name") and poi_dict.get("location")
+        ]
+    except Exception as exc:
+        warning = f"AMap attraction search failed: {exc}"
 
-注意：
-1. 提供真实的景点信息
-2. 经纬度坐标要准确
-3. 根据偏好筛选合适的景点
-4. 每天需要2-3个景点
+    if not attractions:
+        llm = create_llm()
+        hard_restraints_block = _build_hard_restraints_block(state)
+        inferred_preferences = state.get("inferred_preferences", "")
+        system_prompt = hard_restraints_block + """You are a travel attraction researcher.
+Return only a JSON array of attraction objects with fields:
+name, address, location, visit_duration, description, category, ticket_price.
 """
-    
-    # 构建用户查询
-    keywords = ', '.join(request.preferences) if request.preferences else "热门景点"
-    user_query = f"""请为{request.city}推荐适合{request.travel_days}天旅行的景点。
-    
-用户偏好: 结合用户新旧偏好，新偏好为主，旧偏好为辅。用户旧偏好：{inferred_preferences} 用户新偏好：{keywords}
-旅行天数: {request.travel_days}天
+        keywords = ", ".join(request.preferences) if request.preferences else "热门景点"
+        user_query = (
+            f"为 {request.city} 生成适合 {request.travel_days} 天行程的景点候选。"
+            f" 历史偏好: {inferred_preferences or '无'}。当前偏好: {keywords}。"
+            f" 至少返回 {max(4, request.travel_days * 2)} 个景点。"
+        )
+        response = llm.invoke(
+            [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_query),
+            ]
+        )
+        attractions = _extract_json_array(str(response.content))
+        if attractions and warning:
+            warning = f"{warning}; fell back to LLM attraction generation"
 
-请返回至少{request.travel_days * 2}个景点的JSON列表。"""
-    
-    # 调用LLM
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_query)
-    ]
-    
-    response = llm.invoke(messages)
-    attractions_data = response.content
-    
-    print(f"[GRAPH] 景点搜索完成: {len(attractions_data)} 字符")
-    
+    gathered_context["attractions"] = attractions
+    sop_completed["attractions_done"] = bool(attractions)
+
+    next_state = {
+        **state,
+        "gathered_context": gathered_context,
+        "sop_completed": sop_completed,
+        "candidate_filter_notes": list(state.get("candidate_filter_notes") or []),
+    }
+    next_state["sop_required"] = dict(state.get("sop_required") or _default_sop_required(request))
+    next_state["sop_required"]["transit_required"] = _derive_transit_required(next_state)
+    context_summary = _build_context_summary(next_state)
+    summary = f"Collected {len(attractions)} attraction candidates."
     return {
-        "attractions_data": attractions_data,
-        "current_step": "attractions_searched"
+        "attractions_data": json.dumps(attractions, ensure_ascii=False),
+        "gathered_context": gathered_context,
+        "sop_completed": sop_completed,
+        "sop_required": next_state["sop_required"],
+        "tool_call_history": _append_tool_history(
+            state,
+            tool_name="search_attractions_tool",
+            tool_input=tool_input,
+            success=bool(attractions),
+            summary=summary,
+            result_count=len(attractions),
+            warning=warning,
+        ),
+        "context_summary": context_summary,
+        "loop_count": int(state.get("loop_count", 0)) + 1,
+        "router_warning": None,
+        "current_step": "attractions_searched",
     }
 
 
 def query_weather_node(state: TripPlannerState) -> Dict[str, Any]:
-    """天气查询节点"""
-    print("🌤️  正在查询天气...")
-    
+    """Search and normalize weather context."""
+    print("[GRAPH] querying weather...")
+
     request = state["request"]
-    llm = create_llm()
-    
-    # 构建系统提示词
-    system_prompt = """你是天气查询专家。请根据城市和日期，生成天气预报信息。
+    tool_input = _tool_input_for_step("query_weather_tool", state)
+    gathered_context = _copy_gathered_context(state)
+    sop_completed = dict(state.get("sop_completed") or _default_sop_completed())
+    warning: str | None = None
 
-返回格式（JSON）:
-```json
-[
-  {
-    "date": "YYYY-MM-DD",
-    "day_weather": "晴",
-    "night_weather": "多云",
-    "day_temp": 25,
-    "night_temp": 15,
-    "wind_direction": "南风",
-    "wind_power": "1-3级"
-  }
-]
-```
+    weather_items: list[dict[str, Any]] = []
+    try:
+        amap_service = get_amap_service()
+        weather_items = [_model_to_dict(item) for item in amap_service.get_weather(request.city)]
+    except Exception as exc:
+        warning = f"AMap weather lookup failed: {exc}"
 
-注意：
-1. 为每一天提供天气信息
-2. 温度为纯数字（不带单位）
-3. 天气描述要简洁
+    if not weather_items:
+        llm = create_llm()
+        system_prompt = """You are a weather research assistant.
+Return only a JSON array with fields:
+date, day_weather, night_weather, day_temp, night_temp, wind_direction, wind_power.
 """
-    
-    # 构建用户查询
-    user_query = f"""请为{request.city}提供{request.start_date}到{request.end_date}（共{request.travel_days}天）的天气预报。"""
-    
-    # 调用LLM
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_query)
-    ]
-    
-    response = llm.invoke(messages)
-    weather_data = response.content
-    
-    print(f"[GRAPH] 天气查询完成: {len(weather_data)} 字符")
-    
+        user_query = f"为 {request.city} 生成覆盖 {request.start_date} 到 {request.end_date} 的天气信息。"
+        response = llm.invoke(
+            [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_query),
+            ]
+        )
+        weather_items = _extract_json_array(str(response.content))
+        if weather_items and warning:
+            warning = f"{warning}; fell back to LLM weather generation"
+
+    gathered_context["weather"] = weather_items
+    sop_completed["weather_done"] = bool(weather_items)
+    next_state = {
+        **state,
+        "gathered_context": gathered_context,
+        "sop_completed": sop_completed,
+    }
+    context_summary = _build_context_summary(next_state)
+    summary = f"Collected {len(weather_items)} weather entries."
     return {
-        "weather_data": weather_data,
-        "current_step": "weather_queried"
+        "weather_data": json.dumps(weather_items, ensure_ascii=False),
+        "gathered_context": gathered_context,
+        "sop_completed": sop_completed,
+        "tool_call_history": _append_tool_history(
+            state,
+            tool_name="query_weather_tool",
+            tool_input=tool_input,
+            success=bool(weather_items),
+            summary=summary,
+            result_count=len(weather_items),
+            warning=warning,
+        ),
+        "context_summary": context_summary,
+        "loop_count": int(state.get("loop_count", 0)) + 1,
+        "router_warning": None,
+        "current_step": "weather_queried",
     }
 
 
 def search_hotels_node(state: TripPlannerState) -> Dict[str, Any]:
-    """酒店搜索节点"""
-    print("[GRAPH] 正在搜索酒店...")
-    
+    """Search and normalize hotel candidates."""
+    print("[GRAPH] searching hotels...")
+
     request = state["request"]
+    tool_input = _tool_input_for_step("search_hotels_tool", state)
+    gathered_context = _copy_gathered_context(state)
+    sop_completed = dict(state.get("sop_completed") or _default_sop_completed())
+    warning: str | None = None
+
     llm = create_llm()
-    
-    # 构建系统提示词
-    system_prompt = """你是酒店推荐专家。请根据城市和住宿类型，推荐合适的酒店。
-
-返回格式（JSON）:
-```json
-[
-  {
-    "name": "酒店名称",
-    "address": "酒店地址",
-    "location": {"longitude": 116.397128, "latitude": 39.916527},
-    "price_range": "300-500元",
-    "rating": "4.5",
-    "distance": "距离市中心2公里",
-    "type": "经济型酒店",
-    "estimated_cost": 400
-  }
-]
-```
-
-注意：
-1. 提供真实的酒店信息
-2. 价格要合理
-3. 根据住宿偏好筛选
+    system_prompt = """You are a hotel recommendation assistant.
+Return only a JSON array with fields:
+name, address, location, price_range, rating, distance, type, estimated_cost.
 """
-    
-    # 构建用户查询
-    user_query = f"""请为{request.city}推荐{request.accommodation}类型的酒店，需要住{request.travel_days}晚。
-    
-推荐至少3个不同价位的酒店。"""
-    
-    # 调用LLM
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_query)
-    ]
-    
-    response = llm.invoke(messages)
-    hotel_data = response.content
-    
-    print(f"[GRAPH] 酒店搜索完成: {len(hotel_data)} 字符")
-    
+    user_query = (
+        f"为 {request.city} 推荐 {request.accommodation} 类型酒店，住 {request.travel_days} 晚。"
+        " 至少返回 3 个不同价位候选。"
+    )
+    response = llm.invoke(
+        [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_query),
+        ]
+    )
+    hotels = _extract_json_array(str(response.content))
+
+    if hotels:
+        try:
+            amap_service = get_amap_service()
+            for hotel in hotels:
+                if hotel.get("location") or not hotel.get("address"):
+                    continue
+                location = amap_service.geocode(str(hotel["address"]), city=request.city)
+                if location and hasattr(location, "model_dump"):
+                    hotel["location"] = location.model_dump(mode="json")
+        except Exception as exc:
+            warning = f"Hotel geocoding skipped: {exc}"
+
+    gathered_context["hotels"] = hotels
+    if (state.get("sop_required") or {}).get("hotels_required"):
+        sop_completed["hotels_done"] = bool(hotels)
+
+    next_state = {
+        **state,
+        "gathered_context": gathered_context,
+        "sop_completed": sop_completed,
+    }
+    context_summary = _build_context_summary(next_state)
+    summary = f"Collected {len(hotels)} hotel candidates."
     return {
-        "hotel_data": hotel_data,
-        "current_step": "hotels_searched"
+        "hotel_data": json.dumps(hotels, ensure_ascii=False),
+        "gathered_context": gathered_context,
+        "sop_completed": sop_completed,
+        "tool_call_history": _append_tool_history(
+            state,
+            tool_name="search_hotels_tool",
+            tool_input=tool_input,
+            success=bool(hotels),
+            summary=summary,
+            result_count=len(hotels),
+            warning=warning,
+        ),
+        "context_summary": context_summary,
+        "loop_count": int(state.get("loop_count", 0)) + 1,
+        "router_warning": None,
+        "current_step": "hotels_searched",
+    }
+
+def search_local_events_node(state: TripPlannerState) -> Dict[str, Any]:
+    """Search optional local events as an enhancement source."""
+    print("[GRAPH] searching local events...")
+
+    tool_input = _tool_input_for_step("search_local_events_tool", state)
+    gathered_context = _copy_gathered_context(state)
+    warning: str | None = None
+    natural_text = ""
+
+    try:
+        tool = _get_capability_tool("search_local_events_tool")
+        tool_result = tool.invoke(tool_input)
+        local_events = list(tool_result.get("items") or [])
+        natural_text = str(tool_result.get("text") or "")
+        warning = tool_result.get("warning")
+    except Exception as exc:
+        local_events = []
+        natural_text = "Local events lookup failed."
+        warning = f"search_local_events_tool failed: {exc}"
+
+    gathered_context["local_events"] = local_events
+    next_state = {
+        **state,
+        "gathered_context": gathered_context,
+    }
+    return {
+        "gathered_context": gathered_context,
+        "tool_call_history": _append_tool_history(
+            state,
+            tool_name="search_local_events_tool",
+            tool_input=tool_input,
+            success=bool(local_events),
+            summary=natural_text or f"Collected {len(local_events)} local event candidates.",
+            result_count=len(local_events),
+            warning=warning,
+        ),
+        "context_summary": _build_context_summary(next_state),
+        "loop_count": int(state.get("loop_count", 0)) + 1,
+        "router_warning": None,
+        "current_step": "local_events_searched",
+    }
+
+
+def estimate_transit_time_node(state: TripPlannerState) -> Dict[str, Any]:
+    """Estimate transit time and keep/drop risky cross-region candidates."""
+    print("[GRAPH] estimating transit...")
+
+    request = state["request"]
+    tool_input = _tool_input_for_step("estimate_transit_time_tool", state)
+    gathered_context = _copy_gathered_context(state)
+    sop_completed = dict(state.get("sop_completed") or _default_sop_completed())
+    candidate_filter_notes = list(state.get("candidate_filter_notes") or [])
+    route_type = tool_input.get("route_type") or _infer_route_type(request.transportation)
+    evidence: list[dict[str, Any]] = []
+    warning: str | None = None
+
+    attractions = [item for item in gathered_context.get("attractions") or [] if isinstance(item, dict)]
+    hotels = [item for item in gathered_context.get("hotels") or [] if isinstance(item, dict)]
+    local_events = [item for item in gathered_context.get("local_events") or [] if isinstance(item, dict)]
+    checkpoints: list[dict[str, Any]] = []
+    if hotels:
+        checkpoints.append(hotels[0])
+    checkpoints.extend(attractions[:3])
+    fixed_time_events = [
+        item
+        for item in local_events
+        if str(item.get("date") or "").strip() and str(item.get("time_window") or "").strip()
+    ]
+    if fixed_time_events:
+        checkpoints.append(fixed_time_events[0])
+
+    if len(checkpoints) >= 2:
+        try:
+            amap_service = get_amap_service()
+            threshold = 45 if any(
+                keyword in str(getattr(request, "free_text_input", "") or "")
+                for keyword in LOW_TRANSIT_HINTS
+            ) else 60
+            for origin, destination in zip(checkpoints, checkpoints[1:]):
+                origin_address = str(origin.get("address") or "")
+                destination_address = str(destination.get("address") or "")
+                if not origin_address or not destination_address:
+                    continue
+                route = amap_service.plan_route(
+                    origin_address=origin_address,
+                    destination_address=destination_address,
+                    origin_city=request.city,
+                    destination_city=request.city,
+                    route_type=route_type,
+                )
+                duration = int(route.get("duration") or 0)
+                if duration <= 0:
+                    continue
+                decision = "drop_candidate" if duration > threshold else "keep"
+                reason = (
+                    f"Travel time {duration} minutes exceeds threshold {threshold}."
+                    if decision == "drop_candidate"
+                    else "Travel time acceptable."
+                )
+                evidence.append(
+                    {
+                        "origin_name": str(origin.get("name") or origin_address),
+                        "destination_name": str(destination.get("name") or destination_address),
+                        "duration_minutes": duration,
+                        "decision": decision,
+                        "reason": reason,
+                    }
+                )
+                if decision == "drop_candidate":
+                    candidate_filter_notes.append(
+                        f"{origin.get('name') or origin_address} -> {destination.get('name') or destination_address} 通勤 {duration} 分钟，建议从同日候选中剔除。"
+                    )
+        except Exception as exc:
+            warning = f"Transit estimation failed: {exc}"
+    else:
+        warning = "Not enough addressable checkpoints for transit estimation."
+
+    gathered_context["transit_evidence"] = evidence
+    sop_completed["transit_done"] = bool(evidence)
+    next_state = {
+        **state,
+        "gathered_context": gathered_context,
+        "sop_completed": sop_completed,
+        "candidate_filter_notes": candidate_filter_notes,
+    }
+    return {
+        "gathered_context": gathered_context,
+        "sop_completed": sop_completed,
+        "candidate_filter_notes": candidate_filter_notes,
+        "tool_call_history": _append_tool_history(
+            state,
+            tool_name="estimate_transit_time_tool",
+            tool_input=tool_input,
+            success=bool(evidence),
+            summary=f"Collected {len(evidence)} transit evidence items.",
+            result_count=len(evidence),
+            warning=warning,
+        ),
+        "context_summary": _build_context_summary(next_state),
+        "loop_count": int(state.get("loop_count", 0)) + 1,
+        "router_warning": None,
+        "current_step": "transit_estimated",
+    }
+
+
+def merge_tool_result_node(state: TripPlannerState) -> Dict[str, Any]:
+    """Normalize summary fields after a tool node updated the state."""
+    sop_required = dict(state.get("sop_required") or _default_sop_required(state["request"]))
+    sop_required["transit_required"] = _derive_transit_required(state)
+    next_state = {
+        **state,
+        "sop_required": sop_required,
+    }
+    return {
+        "sop_required": sop_required,
+        "context_summary": _build_context_summary(next_state),
+        "ready_for_planning": all_required_sop_completed(next_state),
+        "current_step": "tool_result_merged",
+    }
+
+
+def router_warning_node(state: TripPlannerState) -> Dict[str, Any]:
+    """Inject a corrective warning and send the flow back to the agent loop."""
+    warning = state.get("router_warning") or _build_router_warning_message(state)
+    return {
+        "router_warning": warning,
+        "context_summary": _build_context_summary({**state, "router_warning": warning}),
+        "current_step": "router_warning",
+    }
+
+
+def forced_exit_with_best_effort_node(state: TripPlannerState) -> Dict[str, Any]:
+    """Stop the loop after max retries and continue with the best available context."""
+    reason = state.get("force_exit_reason") or _build_forced_exit_reason(state)
+    return {
+        "forced_exit": True,
+        "force_exit_reason": reason,
+        "ready_for_planning": True,
+        "context_summary": _build_context_summary(
+            {
+                **state,
+                "forced_exit": True,
+                "force_exit_reason": reason,
+            }
+        ),
+        "current_step": "forced_exit_with_best_effort",
     }
 
 
@@ -232,10 +998,36 @@ def plan_trip_node(state: TripPlannerState) -> Dict[str, Any]:
     print("[GRAPH] 正在生成行程计划...")
     
     request = state["request"]
+    gathered_context = _copy_gathered_context(state)
+    context_summary = state.get("context_summary", "")
     attractions_data = state.get("attractions_data", "")
     weather_data = state.get("weather_data", "")
     hotel_data = state.get("hotel_data", "")
     inferred_preferences = state.get("inferred_preferences", "")
+
+    planning_attractions, planning_local_events = _filter_planning_candidates(
+        state,
+        attractions=list(gathered_context.get("attractions") or []),
+        local_events=list(gathered_context.get("local_events") or []),
+    )
+
+    if planning_attractions:
+        attractions_data = json.dumps(planning_attractions, ensure_ascii=False, indent=2)
+    if gathered_context.get("weather"):
+        weather_data = json.dumps(gathered_context["weather"], ensure_ascii=False, indent=2)
+    if gathered_context.get("hotels"):
+        hotel_data = json.dumps(gathered_context["hotels"], ensure_ascii=False, indent=2)
+
+    planner_local_events = [
+        item
+        for item in planning_local_events
+        if isinstance(item, dict) and item.get("conflict_status") != "conflicting"
+    ]
+    if not planner_local_events:
+        planner_local_events = list(planning_local_events)
+    local_events_data = json.dumps(planner_local_events, ensure_ascii=False, indent=2)
+    transit_evidence_data = json.dumps(gathered_context.get("transit_evidence") or [], ensure_ascii=False, indent=2)
+    candidate_filter_notes_data = json.dumps(state.get("candidate_filter_notes") or [], ensure_ascii=False, indent=2)
     
     llm = create_llm()
     
@@ -313,7 +1105,24 @@ def plan_trip_node(state: TripPlannerState) -> Dict[str, Any]:
 
 **酒店信息:**
 {hotel_data}
+
+**信息搜集摘要:**
+{context_summary or '无'}
+
+**本地活动信息:**
+{local_events_data}
+
+**交通测算证据:**
+{transit_evidence_data}
+
+**Candidate filter notes:**
+{candidate_filter_notes_data}
 """
+
+    user_query += (
+        "\n**Local event usage rule:** treat local events as optional surprise candidates only. "
+        "Prefer items where conflict_status is not conflicting, and do not let local events replace the core attraction plan."
+    )
 
     if inferred_preferences:
         user_query += f"\n\n**历史偏好摘要（仅供参考，本次明确输入优先）:**\n{inferred_preferences}"
@@ -945,6 +1754,32 @@ def _dedupe_text_list(items: list[str]) -> list[str]:
         seen.add(text)
         result.append(text)
     return result
+
+
+def info_gathering_router(state: TripPlannerState) -> str:
+    if state.get("loop_count", 0) >= state.get("max_loops", 5):
+        return "forced_exit_with_best_effort"
+
+    output = state.get("agent_output") or {}
+    action = output.get("action")
+    tool_name = output.get("tool_name")
+
+    if action == "call_tool":
+        if tool_name in INFO_GATHERING_TOOL_NAMES:
+            return str(tool_name)
+        return "router_warning"
+
+    if action == "submit_context":
+        if all_required_sop_completed(state) and output.get("ready_for_planning") is True:
+            return "plan_trip"
+        return "router_warning"
+
+    if action == "continue":
+        if _missing_required_steps(state):
+            return "router_warning"
+        return "info_gathering_agent"
+
+    return "router_warning"
 
 
 def should_retry_parse(state: TripPlannerState) -> Literal["schedule_plan", "parse_plan", "error_handler"]:
