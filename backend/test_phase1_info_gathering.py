@@ -7,6 +7,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ.setdefault("DEBUG", "false")
@@ -15,14 +16,17 @@ BACKEND_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.agents.graph_nodes import (  # noqa: E402
+    _build_info_gathering_decision_prompt,
     forced_exit_with_best_effort_node,
     info_gathering_agent_node,
     info_gathering_router,
     init_info_gathering_node,
     query_weather_node,
     router_warning_node,
+    search_attractions_node,
     search_hotels_node,
 )
+from app.agents.tools import get_capability_tool  # noqa: E402
 from app.models.schemas import TripRequest  # noqa: E402
 
 
@@ -59,6 +63,36 @@ class FakeAmapService:
             "latitude": 31.23,
             "city": city,
         }
+
+    def search_poi(self, keyword: str, _city: str, citylimit: bool = True):
+        if "酒店" not in keyword and "hotel" not in keyword.lower():
+            return [
+                {
+                    "id": "spot-1",
+                    "name": "外滩",
+                    "address": "上海市黄浦区中山东一路",
+                    "location": {"longitude": 121.49, "latitude": 31.24},
+                    "type": "景点",
+                }
+            ]
+        return [
+            {
+                "id": "hotel-1",
+                "name": "静安酒店",
+                "address": "上海市静安区测试路 1 号",
+                "location": {"longitude": 121.47, "latitude": 31.23},
+                "type": "经济型酒店",
+                "rating": "4.5",
+            }
+        ]
+
+
+class EmptyAmapService(FakeAmapService):
+    def get_weather(self, _city: str):
+        return []
+
+    def search_poi(self, _keyword: str, _city: str, citylimit: bool = True):
+        return []
 
 
 class InfoGatheringPhase1Tests(unittest.TestCase):
@@ -172,7 +206,7 @@ class InfoGatheringPhase1Tests(unittest.TestCase):
         self.assertIn("景点信息尚未完成", result["force_exit_reason"])
         self.assertIn("search_attractions_tool", result["force_exit_reason"])
 
-    @patch("app.agents.graph_nodes.get_amap_service", return_value=FakeAmapService())
+    @patch("app.agents.tools.weather_tool.get_amap_service", return_value=FakeAmapService())
     def test_query_weather_updates_sop_and_tool_history(self, _amap):
         state = self.base_state()
         result = query_weather_node(state)
@@ -180,27 +214,8 @@ class InfoGatheringPhase1Tests(unittest.TestCase):
         self.assertEqual(result["tool_call_history"][-1]["tool_name"], "query_weather_tool")
         self.assertEqual(json.loads(result["weather_data"])[0]["day_weather"], "晴")
 
-    @patch(
-        "app.agents.graph_nodes.create_llm",
-        return_value=FakeLLM(
-            json.dumps(
-                [
-                    {
-                        "name": "静安酒店",
-                        "address": "上海市静安区测试路 1 号",
-                        "price_range": "300-500元",
-                        "rating": "4.5",
-                        "distance": "距离核心景点2公里",
-                        "type": "经济型酒店",
-                        "estimated_cost": 400,
-                    }
-                ],
-                ensure_ascii=False,
-            )
-        ),
-    )
-    @patch("app.agents.graph_nodes.get_amap_service", return_value=FakeAmapService())
-    def test_search_hotels_updates_sop_and_tool_history(self, _amap, _llm):
+    @patch("app.agents.tools.hotels_tool.get_amap_service", return_value=FakeAmapService())
+    def test_search_hotels_updates_sop_and_tool_history(self, _amap):
         state = self.base_state()
         result = search_hotels_node(state)
         self.assertTrue(result["sop_completed"]["hotels_done"])
@@ -212,6 +227,135 @@ class InfoGatheringPhase1Tests(unittest.TestCase):
         result = info_gathering_agent_node(state)
         self.assertEqual(result["agent_output"]["action"], "call_tool")
         self.assertEqual(result["agent_output"]["tool_name"], "search_attractions_tool")
+
+    def test_registry_returns_weather_and_hotels_tools(self):
+        self.assertIsNotNone(get_capability_tool("search_attractions_tool"))
+        self.assertIsNotNone(get_capability_tool("query_weather_tool"))
+        self.assertIsNotNone(get_capability_tool("search_hotels_tool"))
+
+    def test_info_gathering_prompt_contains_tool_guidance(self):
+        state = self.base_state()
+        messages = _build_info_gathering_decision_prompt(state)
+        system_prompt = messages[0].content
+        self.assertIn("real AMap POI data", system_prompt)
+        self.assertIn("real AMap weather data", system_prompt)
+        self.assertIn("cannot_be_replaced_by", system_prompt)
+        self.assertIn("invent_weather", system_prompt)
+        self.assertIn("invent_hotels", system_prompt)
+        self.assertIn("required SOP complete", system_prompt)
+
+    @patch("app.agents.tools.attractions_tool.get_amap_service", return_value=FakeAmapService())
+    def test_search_attractions_updates_sop_and_tool_history(self, _amap):
+        state = self.base_state()
+        result = search_attractions_node(state)
+        self.assertTrue(result["sop_completed"]["attractions_done"])
+        self.assertEqual(result["tool_call_history"][-1]["tool_name"], "search_attractions_tool")
+        self.assertEqual(json.loads(result["attractions_data"])[0]["name"], "外滩")
+
+    @patch("app.agents.graph_nodes.get_settings", return_value=SimpleNamespace(info_gathering_use_llm=True))
+    @patch(
+        "app.agents.graph_nodes.create_llm",
+        return_value=FakeLLM(
+            json.dumps(
+                {
+                    "action": "call_tool",
+                    "tool_name": "query_weather_tool",
+                    "reasoning_summary": "Need weather after attractions are ready.",
+                    "ready_for_planning": False,
+                },
+                ensure_ascii=False,
+            )
+        ),
+    )
+    def test_info_gathering_llm_decision_selects_weather_when_allowed(self, _llm, _settings):
+        state = self.base_state()
+        state["sop_completed"]["attractions_done"] = True
+        result = info_gathering_agent_node(state)
+        self.assertEqual(result["agent_output"]["action"], "call_tool")
+        self.assertEqual(result["agent_output"]["tool_name"], "query_weather_tool")
+        self.assertEqual(
+            result["agent_output"]["tool_input"],
+            {"city": state["request"].city, "date_range": [state["request"].start_date, state["request"].end_date]},
+        )
+
+    @patch("app.agents.graph_nodes.get_settings", return_value=SimpleNamespace(info_gathering_use_llm=True))
+    @patch(
+        "app.agents.graph_nodes.create_llm",
+        return_value=FakeLLM(
+            json.dumps(
+                {
+                    "action": "submit_context",
+                    "tool_name": None,
+                    "reasoning_summary": "Looks ready.",
+                    "ready_for_planning": True,
+                },
+                ensure_ascii=False,
+            )
+        ),
+    )
+    def test_info_gathering_llm_cannot_submit_before_required_sop(self, _llm, _settings):
+        state = self.base_state()
+        result = info_gathering_agent_node(state)
+        self.assertEqual(result["agent_output"]["action"], "call_tool")
+        self.assertEqual(result["agent_output"]["tool_name"], "search_attractions_tool")
+        self.assertFalse(result["agent_output"]["ready_for_planning"])
+
+    @patch("app.agents.graph_nodes.get_settings", return_value=SimpleNamespace(info_gathering_use_llm=True))
+    @patch(
+        "app.agents.graph_nodes.create_llm",
+        return_value=FakeLLM(
+            json.dumps(
+                {
+                    "action": "call_tool",
+                    "tool_name": "search_local_events_tool",
+                    "reasoning_summary": "Optional local events sound useful.",
+                    "ready_for_planning": False,
+                },
+                ensure_ascii=False,
+            )
+        ),
+    )
+    def test_info_gathering_llm_cannot_use_local_events_to_skip_required_sop(self, _llm, _settings):
+        state = self.base_state()
+        result = info_gathering_agent_node(state)
+        self.assertEqual(result["agent_output"]["action"], "call_tool")
+        self.assertEqual(result["agent_output"]["tool_name"], "search_attractions_tool")
+
+    @patch("app.agents.graph_nodes.get_settings", return_value=SimpleNamespace(info_gathering_use_llm=True))
+    @patch("app.agents.graph_nodes.create_llm", return_value=FakeLLM("not json"))
+    def test_info_gathering_llm_bad_json_falls_back_to_rules(self, _llm, _settings):
+        state = self.base_state()
+        state["sop_completed"]["attractions_done"] = True
+        result = info_gathering_agent_node(state)
+        self.assertEqual(result["agent_output"]["action"], "call_tool")
+        self.assertEqual(result["agent_output"]["tool_name"], "query_weather_tool")
+
+    @patch("app.agents.graph_nodes.create_llm", side_effect=AssertionError("LLM fallback should not be used"))
+    @patch("app.agents.tools.attractions_tool.get_amap_service", return_value=EmptyAmapService())
+    def test_search_attractions_no_result_does_not_fallback_to_llm(self, _amap, _llm):
+        state = self.base_state()
+        result = search_attractions_node(state)
+        self.assertFalse(result["sop_completed"]["attractions_done"])
+        self.assertEqual(json.loads(result["attractions_data"]), [])
+        self.assertIn("warning", result["tool_call_history"][-1])
+
+    @patch("app.agents.graph_nodes.create_llm", side_effect=AssertionError("LLM fallback should not be used"))
+    @patch("app.agents.tools.weather_tool.get_amap_service", return_value=EmptyAmapService())
+    def test_query_weather_no_result_does_not_fallback_to_llm(self, _amap, _llm):
+        state = self.base_state()
+        result = query_weather_node(state)
+        self.assertFalse(result["sop_completed"]["weather_done"])
+        self.assertEqual(json.loads(result["weather_data"]), [])
+        self.assertIn("warning", result["tool_call_history"][-1])
+
+    @patch("app.agents.graph_nodes.create_llm", side_effect=AssertionError("LLM fallback should not be used"))
+    @patch("app.agents.tools.hotels_tool.get_amap_service", return_value=EmptyAmapService())
+    def test_search_hotels_no_result_does_not_fallback_to_llm(self, _amap, _llm):
+        state = self.base_state()
+        result = search_hotels_node(state)
+        self.assertFalse(result["sop_completed"]["hotels_done"])
+        self.assertEqual(json.loads(result["hotel_data"]), [])
+        self.assertIn("warning", result["tool_call_history"][-1])
 
     def test_info_gathering_agent_triggers_local_events_for_keyword_hit(self):
         state = self.base_state(free_text="想看演出和音乐会")

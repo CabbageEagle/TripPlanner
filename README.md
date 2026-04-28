@@ -1,212 +1,177 @@
-# HelloAgents智能旅行助手 🌍✈️
+# HelloAgents Trip Planner
 
-基于HelloAgents框架构建的智能旅行规划助手,集成高德地图MCP服务,提供个性化的旅行计划生成。
+智能旅行规划系统。当前主链路基于 LangGraph 编排，结合高德地图服务、LLM、RAG 记忆、规则排程和校验修复闭环，生成可展示、可编辑、可保存的多日行程。
 
-## ✨ 功能特点
+## 核心能力
 
-- 🤖 **AI驱动的旅行规划**: 基于HelloAgents框架的SimpleAgent,智能生成详细的多日旅程
-- 🗺️ **高德地图集成**: 通过MCP协议接入高德地图服务,支持景点搜索、路线规划、天气查询
-- 🧠 **智能工具调用**: Agent自动调用高德地图MCP工具,获取实时POI、路线和天气信息
-- 🎨 **现代化前端**: Vue3 + TypeScript + Vite,响应式设计,流畅的用户体验
-- 📱 **完整功能**: 包含住宿、交通、餐饮和景点游览时间推荐
+- LangGraph 工作流：信息收集、行程生成、JSON 解析、自动排程、规则校验、失败修复。
+- 四 Agent 职责收敛：信息收集决策 agent、行程生成 agent、计划修复 agent、可选质量评估 agent。
+- 工具能力封装：天气、景点、酒店、本地活动、交通时间均通过 `@tool + Pydantic` 封装并注册到 `CAPABILITY_TOOLS`。
+- 信息收集 SOP：景点和天气为基础必查项，酒店和交通按请求与候选风险触发，本地活动只作为可选惊喜增强项。
+- RAG 记忆增强：从历史偏好和用户编辑中提炼记忆，规划时召回并注入上下文。
+- 编辑闭环：前端编辑后保存版本，后端自动重排并沉淀新的偏好信号。
 
-## 🏗️ 技术栈
+## 技术栈
 
 ### 后端
-- **框架**: HelloAgents (基于SimpleAgent)
-- **API**: FastAPI
-- **MCP工具**: amap-mcp-server (高德地图)
-- **LLM**: 支持多种LLM提供商(OpenAI, DeepSeek等)
+
+- FastAPI
+- LangGraph / LangChain
+- OpenAI-compatible LLM API
+- SQLAlchemy + PostgreSQL + pgvector
+- 高德地图服务封装
 
 ### 前端
-- **框架**: Vue 3 + TypeScript
-- **构建工具**: Vite
-- **UI组件库**: Ant Design Vue
-- **地图服务**: 高德地图 JavaScript API
-- **HTTP客户端**: Axios
 
-## 📁 项目结构
+- Vue 3
+- TypeScript
+- Vite
+- Ant Design Vue
+- 高德地图 JavaScript API
 
-```
+## 项目结构
+
+```text
 helloagents-trip-planner/
-├── backend/                    # 后端服务
+├── backend/
 │   ├── app/
-│   │   ├── agents/            # Agent实现
-│   │   │   └── trip_planner_agent.py
-│   │   ├── api/               # FastAPI路由
-│   │   │   ├── main.py
-│   │   │   └── routes/
-│   │   │       ├── trip.py
-│   │   │       └── map.py
-│   │   ├── services/          # 服务层
-│   │   │   ├── amap_service.py
-│   │   │   └── llm_service.py
-│   │   ├── models/            # 数据模型
-│   │   │   └── schemas.py
-│   │   └── config.py          # 配置管理
-│   ├── requirements.txt
-│   ├── .env.example
-│   └── .gitignore
-├── frontend/                   # 前端应用
-│   ├── src/
-│   │   ├── components/        # Vue组件
-│   │   ├── services/          # API服务
-│   │   ├── types/             # TypeScript类型
-│   │   └── views/             # 页面视图
-│   ├── package.json
-│   └── vite.config.ts
+│   │   ├── agents/
+│   │   │   ├── graph_state.py
+│   │   │   ├── graph_nodes.py
+│   │   │   ├── trip_planner_agent_langgraph.py
+│   │   │   └── tools/
+│   │   │       ├── __init__.py
+│   │   │       ├── attractions_tool.py
+│   │   │       ├── weather_tool.py
+│   │   │       ├── hotels_tool.py
+│   │   │       ├── local_events_tool.py
+│   │   │       └── transit_tool.py
+│   │   ├── api/
+│   │   ├── db/
+│   │   ├── models/
+│   │   ├── repositories/
+│   │   ├── services/
+│   │   └── config.py
+│   └── test_*.py
+├── frontend/
+│   └── src/
+├── docs/
+├── PROJECT_INTRODUCTION.md
 └── README.md
 ```
 
-## 🚀 快速开始
+## LangGraph 主流程
 
-### 前提条件
+```mermaid
+flowchart TD
+    A["init_info_gathering"] --> B["info_gathering_agent"]
+    B -->|"call_tool"| C["tool executor nodes"]
+    C --> D["merge_tool_result"]
+    D --> B
+    B -->|"submit_context"| E["plan_trip"]
+    B -->|"forced exit"| E
+    E --> F["parse_plan"]
+    F -->|"parsed"| G["schedule_plan"]
+    F -->|"retry parse"| F
+    F -->|"exhausted"| K["error_handler"]
+    G --> H["verify_plan"]
+    H -->|"needs fix"| I["fix_plan"]
+    I --> G
+    H -->|"passed"| J["END"]
+    K --> J
+```
 
-- Python 3.10+
-- Node.js 16+
-- 高德地图API密钥 (Web服务API和Web端(JS API))
-- LLM API密钥 (OpenAI/DeepSeek等)
+信息收集阶段的工具执行节点不是小 agent，只负责从 state 组装输入、调用 registry 中的 tool、把结果写回 `gathered_context` 和 `tool_call_history`。下一步调用哪个工具由 `info_gathering_agent_node` 决策，默认可使用规则兜底，也可通过 `INFO_GATHERING_USE_LLM` 开启 LLM 决策。
 
-### 后端安装
+## 工具注册
 
-1. 进入后端目录
+统一入口位于 `backend/app/agents/tools/__init__.py`：
+
+```python
+CAPABILITY_TOOLS = {
+    "estimate_transit_time_tool": estimate_transit_time_tool,
+    "query_weather_tool": query_weather_tool,
+    "search_attractions_tool": search_attractions_tool,
+    "search_hotels_tool": search_hotels_tool,
+    "search_local_events_tool": search_local_events_tool,
+}
+```
+
+新增工具的推荐流程：
+
+1. 在 `backend/app/agents/tools/` 新增 tool 文件。
+2. 用 Pydantic `BaseModel` 定义输入 schema。
+3. 用 `@tool(args_schema=...)` 封装能力，并在 docstring 写清何时使用、输入约束、输出语义。
+4. Tool 只调用 service，不直接读写 graph state。
+5. 在 `CAPABILITY_TOOLS` 注册。
+6. 在 `graph_nodes.py` 增加薄 adapter：构造输入、调用 registry、写回 state。
+7. 在 planner prompt 中说明如何消费该上下文。
+8. 补充 tool、adapter、planner 消费规则的测试。
+
+## 配置
+
+后端环境变量主要包括：
+
+```env
+LLM_API_KEY=your_llm_api_key
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_MODEL=qwen3.5-plus
+LLM_EMBEDDING_MODEL=text-embedding-3-small
+JUDGE_MODEL=glm-4.7
+INFO_GATHERING_USE_LLM=true
+AMAP_API_KEY=your_amap_key
+DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/trip_planner
+RAG_DEBUG=false
+```
+
+`INFO_GATHERING_USE_LLM=true` 时，信息收集决策 agent 会请求 LLM 输出严格 JSON；解析失败、非法工具、跳过必查 SOP、提前提交等情况会回退到规则决策。
+
+## 快速启动
+
+### 后端
+
 ```bash
 cd backend
-```
-
-2. 创建虚拟环境
-```bash
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-```
-
-3. 安装依赖
-```bash
+venv\Scripts\activate
 pip install -r requirements.txt
+python run.py
 ```
 
-4. 配置环境变量
-```bash
-cp .env.example .env
-# 编辑.env文件,填入你的API密钥
-```
+也可以直接运行：
 
-5. 启动后端服务
 ```bash
 uvicorn app.api.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### 前端安装
+API 文档地址：`http://localhost:8000/docs`
 
-1. 进入前端目录
+### 前端
+
 ```bash
 cd frontend
-```
-
-2. 安装依赖
-```bash
 npm install
-```
-
-3. 配置环境变量
-```bash
-# 创建.env文件, 填入高德地图Web API Key 和 Web端JS API Key
-cp .env.example .env
-```
-
-4. 启动开发服务器
-```bash
 npm run dev
 ```
 
-5. 打开浏览器访问 `http://localhost:5173`
+默认访问：`http://localhost:5173`
 
-## 📝 使用指南
+## 测试
 
-1. 在首页填写旅行信息:
-   - 目的地城市
-   - 旅行日期和天数
-   - 交通方式偏好
-   - 住宿偏好
-   - 旅行风格标签
+当前关键回归命令：
 
-2. 点击"生成旅行计划"按钮
-
-3. 系统将:
-   - 调用HelloAgents Agent生成初步计划
-   - Agent自动调用高德地图MCP工具搜索景点
-   - Agent获取天气信息和路线规划
-   - 整合所有信息生成完整行程
-
-4. 查看结果:
-   - 每日详细行程
-   - 景点信息与地图标记
-   - 交通路线规划
-   - 天气预报
-   - 餐饮推荐
-
-## 🔧 核心实现
-
-### HelloAgents Agent集成
-
-```python
-from hello_agents import SimpleAgent, HelloAgentsLLM
-from hello_agents.tools import MCPTool
-
-# 创建高德地图MCP工具
-amap_tool = MCPTool(
-    name="amap",
-    server_command=["uvx", "amap-mcp-server"],
-    env={"AMAP_MAPS_API_KEY": "your_api_key"},
-    auto_expand=True
-)
-
-# 创建旅行规划Agent
-agent = SimpleAgent(
-    name="旅行规划助手",
-    llm=HelloAgentsLLM(),
-    system_prompt="你是一个专业的旅行规划助手..."
-)
-
-# 添加工具
-agent.add_tool(amap_tool)
+```bash
+python backend/test_phase1_info_gathering.py
+python backend/test_local_events_tooling.py
+python backend/test_phase3_transit_filtering.py
+python -m unittest discover backend -p "test_*.py"
 ```
 
-### MCP工具调用
+`backend/test_langgraph.py` 更接近手工端到端脚本，可能触发真实 LLM/API 链路，不建议作为快速单元回归条件。
 
-Agent可以自动调用以下高德地图MCP工具:
-- `maps_text_search`: 搜索景点POI
-- `maps_weather`: 查询天气
-- `maps_direction_walking_by_address`: 步行路线规划
-- `maps_direction_driving_by_address`: 驾车路线规划
-- `maps_direction_transit_integrated_by_address`: 公共交通路线规划
+## 关键文档
 
-## 📄 API文档
-
-启动后端服务后,访问 `http://localhost:8000/docs` 查看完整的API文档。
-
-主要端点:
-- `POST /api/trip/plan` - 生成旅行计划
-- `GET /api/map/poi` - 搜索POI
-- `GET /api/map/weather` - 查询天气
-- `POST /api/map/route` - 规划路线
-
-## 🤝 贡献指南
-
-欢迎提交Pull Request或Issue!
-
-## 📜 开源协议
-
-CC BY-NC-SA 4.0
-
-## 🙏 致谢
-
-- [HelloAgents](https://github.com/datawhalechina/Hello-Agents) - 智能体教程
-- [HelloAgents框架](https://github.com/jjyaoao/HelloAgents) - 智能体框架
-- [高德地图开放平台](https://lbs.amap.com/) - 地图服务
-- [amap-mcp-server](https://github.com/sugarforever/amap-mcp-server) - 高德地图MCP服务器
-
----
-
-**HelloAgents智能旅行助手** - 让旅行计划变得简单而智能 🌈
+- `PROJECT_INTRODUCTION.md`：当前架构、pipeline、RAG、状态与能力封装说明。
+- `docs/项目架构与Agent开发Pipeline报告.md`：项目工程化报告。
+- `LANGGRAPH_MIGRATION.md`：早期 LangGraph 迁移说明。
 

@@ -47,13 +47,14 @@ class Settings(BaseSettings):
     # Dedicated model for judge/eval (separate from generation model).
     judge_model: str = "glm-4.7"
     llm_embedding_model: str = "text-embedding-3-small"
+    info_gathering_use_llm: bool = True
     rag_debug: bool = False
     schedule_use_mcp_route: bool = False
     log_level: str = "INFO"
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/trip_planner"
     database_echo: bool = False
 
-    @field_validator("debug", "rag_debug", "schedule_use_mcp_route", "database_echo", mode="before")
+    @field_validator("debug", "info_gathering_use_llm", "rag_debug", "schedule_use_mcp_route", "database_echo", mode="before")
     @classmethod
     def parse_bool_like(cls, value):
         """Accept shell-style truthy/falsy strings and tolerate release/dev labels."""
@@ -140,4 +141,5 @@ def print_config() -> None:
     print(f"LLM Base URL: {llm_base_url}")
     print(f"LLM Model: {llm_model}")
     print(f"Judge Model: {judge_model}")
+    print(f"Info Gathering LLM: {'enabled' if settings.info_gathering_use_llm else 'disabled'}")
     print(f"Log Level: {settings.log_level}")

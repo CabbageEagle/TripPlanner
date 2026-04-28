@@ -19,6 +19,7 @@ from app.agents.graph_nodes import (  # noqa: E402
     merge_tool_result_node,
     plan_trip_node,
 )
+from app.agents.tools import get_capability_tool  # noqa: E402
 from app.models.schemas import TripRequest  # noqa: E402
 
 
@@ -130,6 +131,9 @@ class TransitPhase3Tests(unittest.TestCase):
             "error": None,
         }
 
+    def test_registry_returns_transit_tool(self):
+        self.assertIsNotNone(get_capability_tool("estimate_transit_time_tool"))
+
     def test_merge_marks_transit_required_for_fixed_time_local_event(self):
         state = self.base_state()
         state["gathered_context"]["local_events"] = [
@@ -148,7 +152,7 @@ class TransitPhase3Tests(unittest.TestCase):
         result = merge_tool_result_node(state)
         self.assertTrue(result["sop_required"]["transit_required"])
 
-    @patch("app.agents.graph_nodes.get_amap_service", return_value=FakeAmapService(duration=70))
+    @patch("app.agents.tools.transit_tool.get_amap_service", return_value=FakeAmapService(duration=70))
     def test_estimate_transit_time_builds_drop_evidence_and_notes(self, _amap):
         state = self.base_state(free_text="尽量轻松一些，不折腾")
         state["gathered_context"]["local_events"] = [
