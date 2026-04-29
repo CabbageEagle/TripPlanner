@@ -70,11 +70,15 @@ class AmapService:
             )
             raw_text = str(result)
             payload = _normalize_mcp_result(result)
+            raw_pois = _extract_raw_poi_items(payload)
             pois = _extract_poi_list(payload)
             if pois:
                 return pois, None
             if payload:
-                return [], f"AMap returned no POIs for keyword '{keywords}'. Raw result: {_truncate_raw_result(raw_text)}"
+                return [], (
+                    f"AMap returned {len(raw_pois)} raw POIs but 0 parsed POIs for keyword '{keywords}'. "
+                    f"First raw POI: {_truncate_raw_result(raw_pois[0] if raw_pois else raw_text)}"
+                )
             return [], f"AMap MCP returned unparseable result for keyword '{keywords}': {_truncate_raw_result(raw_text)}"
         except Exception as exc:
             print(f"[AMAP] POI search failed: {exc}")
@@ -226,20 +230,25 @@ def _truncate_raw_result(raw_text: str, limit: int = 500) -> str:
     return f"{text[:limit]}..."
 
 
+def _extract_raw_poi_items(payload: dict[str, Any]) -> list[Any]:
+    return _find_first_list(payload, {"pois", "data", "results"}) or []
+
+
 def _extract_poi_list(payload: dict[str, Any]) -> list[POIInfo]:
-    items = _find_first_list(payload, {"pois", "data", "results"}) or []
+    items = _extract_raw_poi_items(payload)
     pois: list[POIInfo] = []
     for item in items:
         if not isinstance(item, dict):
             continue
-        location = _extract_location(item)
-        if location is None:
+        name = str(item.get("name") or "").strip()
+        if not name:
             continue
+        location = _extract_location(item) or Location(longitude=0.0, latitude=0.0)
         try:
             pois.append(
                 POIInfo(
                     id=str(item.get("id") or item.get("poi_id") or ""),
-                    name=str(item.get("name") or ""),
+                    name=name,
                     type=str(item.get("type") or ""),
                     address=str(item.get("address") or ""),
                     location=location,
@@ -277,23 +286,31 @@ def _extract_weather_list(payload: dict[str, Any]) -> list[WeatherInfo]:
 def _extract_location(payload: dict[str, Any]) -> Optional[Location]:
     location = payload.get("location")
     if isinstance(location, str) and "," in location:
-        lng_text, lat_text = location.split(",", 1)
+        lng_text, lat_text = re.split(r"\s*,\s*", location.strip(), maxsplit=1)
         try:
             return Location(longitude=float(lng_text), latitude=float(lat_text))
         except (TypeError, ValueError):
             return None
 
     if isinstance(location, dict):
-        lng = location.get("longitude") or location.get("lng") or location.get("lon")
-        lat = location.get("latitude") or location.get("lat")
+        lng = location.get("longitude") or location.get("lng") or location.get("lon") or location.get("x")
+        lat = location.get("latitude") or location.get("lat") or location.get("y")
         try:
             if lng is not None and lat is not None:
                 return Location(longitude=float(lng), latitude=float(lat))
         except (TypeError, ValueError):
             return None
 
-    lng = payload.get("longitude") or payload.get("lng") or payload.get("lon")
-    lat = payload.get("latitude") or payload.get("lat")
+    lng = (
+        payload.get("longitude")
+        or payload.get("lng")
+        or payload.get("lon")
+        or payload.get("x")
+        or payload.get("entr_location")
+    )
+    lat = payload.get("latitude") or payload.get("lat") or payload.get("y")
+    if isinstance(lng, str) and "," in lng and lat is None:
+        return _extract_location({"location": lng})
     try:
         if lng is not None and lat is not None:
             return Location(longitude=float(lng), latitude=float(lat))

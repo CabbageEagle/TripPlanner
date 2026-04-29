@@ -1130,7 +1130,12 @@ def merge_tool_result_node(state: TripPlannerState) -> Dict[str, Any]:
 
 
 def sop_bootstrap_node(state: TripPlannerState) -> Dict[str, Any]:
-    """Run mandatory SOP tools in parallel before LLM info-gathering decisions."""
+    """Run mandatory SOP tools before LLM info-gathering decisions.
+
+    AMap MCP uses a stdio subprocess per tool call in hello_agents.MCPTool.run().
+    Keep these bootstrap calls sequential to avoid concurrent MCP connections
+    closing each other on Windows.
+    """
     print("[GRAPH] bootstrapping SOP tools...")
     required = state.get("sop_required") or _default_sop_required(state["request"])
     tool_specs: list[tuple[str, str, str]] = [
@@ -1154,27 +1159,17 @@ def sop_bootstrap_node(state: TripPlannerState) -> Dict[str, Any]:
             )
         )
 
-    results_by_tool: dict[str, dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=max(len(tool_specs), 1)) as executor:
-        future_map = {
-            executor.submit(
-                _execute_capability_tool,
-                state,
-                tool_name=tool_name,
-                failure_text=failure_text,
-                reason=reason,
-            ): tool_name
-            for tool_name, failure_text, reason in tool_specs
-        }
-        for future in as_completed(future_map):
-            tool_name = future_map[future]
-            results_by_tool[tool_name] = future.result()
-
     working_state: dict[str, Any] = dict(state)
-    for tool_name, _failure_text, _reason in tool_specs:
+    for tool_name, failure_text, reason in tool_specs:
+        tool_result = _execute_capability_tool(
+            working_state,
+            tool_name=tool_name,
+            failure_text=failure_text,
+            reason=reason,
+        )
         merged = _merge_tool_result_into_state(
             working_state,
-            results_by_tool.get(tool_name) or {},
+            tool_result,
             increment_loop=False,
         )
         working_state.update(merged)
@@ -1444,7 +1439,8 @@ def parse_plan_node(state: TripPlannerState) -> Dict[str, Any]:
             raise ValueError("响应中未找到 JSON 数据")
         
         # 解析 JSON
-        final_plan = normalize_trip_plan_payload(json.loads(json_str), state["request"])
+        source_weather = (state.get("gathered_context") or {}).get("weather")
+        final_plan = normalize_trip_plan_payload(json.loads(json_str), state["request"], source_weather)
         
         print(f"[GRAPH] 解析成功: {final_plan.get('city', 'Unknown')} {len(final_plan.get('days', []))}天行程")
         
@@ -1477,7 +1473,8 @@ def schedule_plan_node(state: TripPlannerState) -> Dict[str, Any]:
             "current_step": "schedule_skipped"
         }
 
-    final_plan = normalize_trip_plan_payload(final_plan, request)
+    source_weather = (state.get("gathered_context") or {}).get("weather")
+    final_plan = normalize_trip_plan_payload(final_plan, request, source_weather)
     schedule_retry_count = state.get("schedule_retry_count", 0)
     requested_indexes = state.get("days_to_reschedule")
 
@@ -1559,7 +1556,8 @@ def schedule_plan_node(state: TripPlannerState) -> Dict[str, Any]:
     else:
         print("[SCHEDULE] 排程完成，无告警")
 
-    final_plan = normalize_trip_plan_payload(final_plan, request)
+    source_weather = (state.get("gathered_context") or {}).get("weather")
+    final_plan = normalize_trip_plan_payload(final_plan, request, source_weather)
     return {
         "final_plan": final_plan,
         "schedule_applied": not schedule_failed,
@@ -1906,7 +1904,11 @@ def _normalize_plan_days(plan: dict[str, Any], request: Any) -> None:
             day["timeline"] = normalized_timeline
 
 
-def normalize_trip_plan_payload(plan: dict[str, Any], request: Any) -> dict[str, Any]:
+def normalize_trip_plan_payload(
+    plan: dict[str, Any],
+    request: Any,
+    source_weather: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Normalize LLM plan JSON into a TripPlan-compatible payload."""
     if not isinstance(plan, dict):
         return plan
@@ -1915,9 +1917,10 @@ def normalize_trip_plan_payload(plan: dict[str, Any], request: Any) -> dict[str,
     plan["start_date"] = str(plan.get("start_date") or request.start_date)
     plan["end_date"] = str(plan.get("end_date") or request.end_date)
     plan["overall_suggestions"] = str(plan.get("overall_suggestions") or "请根据实际天气和场馆开放情况微调行程。")
+    raw_weather = source_weather if source_weather else plan.get("weather_info")
     weather_items: list[dict[str, Any]] = []
-    if isinstance(plan.get("weather_info"), list):
-        for idx, item in enumerate(plan["weather_info"]):
+    if isinstance(raw_weather, list):
+        for idx, item in enumerate(raw_weather):
             if not isinstance(item, dict):
                 continue
             base_date = datetime.strptime(request.start_date, "%Y-%m-%d") + timedelta(days=idx)

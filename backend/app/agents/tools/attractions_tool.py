@@ -40,12 +40,12 @@ def _model_to_dict(item: Any) -> dict[str, Any]:
 
 def _normalize_attraction_item(item: dict[str, Any], city: str) -> dict[str, Any] | None:
     name = str(item.get("name") or "").strip()
-    if not name or not item.get("location"):
+    if not name:
         return None
     return {
         "name": name,
         "address": item.get("address", ""),
-        "location": item.get("location"),
+        "location": item.get("location") or {"longitude": 0.0, "latitude": 0.0},
         "visit_duration": 120,
         "description": f"{name}, suitable as an attraction candidate for a {city} itinerary.",
         "category": item.get("type", "attraction"),
@@ -71,26 +71,35 @@ def _render_attractions_text(city: str, items: list[dict[str, Any]], warning: st
 
 
 def _build_search_keywords(city: str, keywords: list[str] | None) -> list[str]:
-    raw_keywords = [str(item).strip() for item in (keywords or []) if str(item).strip()]
-    mapped: list[str] = []
-    for keyword in raw_keywords:
-        mapped.append(keyword)
-        if any(term in keyword for term in ("历史", "文化", "博物馆", "古迹")):
-            mapped.extend(["博物馆", "故宫", "历史文化景点"])
-        if any(term in keyword for term in ("自然", "风光", "公园", "山水")):
-            mapped.extend(["公园", "自然风景区"])
-        if any(term in keyword for term in ("休闲", "漫步", "城市")):
-            mapped.extend(["城市公园", "步行街"])
+    """Convert abstract interests into AMap-friendly POI search terms."""
+    base_terms = ["旅游景点", "风景区", "公园", "博物馆", f"{city} 景点"]
+    preference_terms: list[str] = []
+    for raw_keyword in keywords or []:
+        keyword = str(raw_keyword).strip()
+        if not keyword:
+            continue
+        if any(term in keyword for term in ("历史", "文化", "博物馆", "古迹", "人文")):
+            preference_terms.extend(["博物馆", "历史文化景点", "古迹"])
+        elif any(term in keyword for term in ("自然", "风光", "公园", "山水", "户外")):
+            preference_terms.extend(["公园", "自然风景区", "森林公园"])
+        elif any(term in keyword for term in ("购物", "商场", "商业", "买东西")):
+            preference_terms.extend(["商业中心", "购物中心", "商圈", "步行街"])
+        elif any(term in keyword for term in ("美食", "小吃", "餐饮")):
+            preference_terms.extend(["美食街", "小吃街", "商业街"])
+        elif any(term in keyword for term in ("休闲", "漫步", "城市")):
+            preference_terms.extend(["城市公园", "步行街", "商业街"])
+        else:
+            # Only use opaque custom text after stable tourism terms.
+            preference_terms.append(keyword)
 
-    mapped.extend(["热门景点", f"{city} 景点"])
     result: list[str] = []
     seen: set[str] = set()
-    for keyword in mapped:
-        if not keyword or keyword in seen:
+    for term in [*base_terms, *preference_terms]:
+        if not term or term in seen:
             continue
-        seen.add(keyword)
-        result.append(keyword)
-        if len(result) >= 5:
+        seen.add(term)
+        result.append(term)
+        if len(result) >= 8:
             break
     return result
 

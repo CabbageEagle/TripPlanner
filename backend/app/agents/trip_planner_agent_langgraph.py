@@ -223,7 +223,8 @@ class LangGraphTripPlanner:
             else:
                 # 直接转换为 TripPlan 对象
                 try:
-                    final_plan_dict = normalize_trip_plan_payload(final_plan_dict, request)
+                    source_weather = (final_state.get("gathered_context") or {}).get("weather")
+                    final_plan_dict = normalize_trip_plan_payload(final_plan_dict, request, source_weather)
                     trip_plan = TripPlan(**final_plan_dict)
                 except Exception as e:
                     print(f"[LANGGRAPH] 转换为 TripPlan 失败: {str(e)}")

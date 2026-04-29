@@ -1,28 +1,40 @@
 <template>
-  <div id="app">
-    <a-layout style="min-height: 100vh">
-      <a-layout-header style="background: #001529; padding: 0 50px">
-        <div style="color: white; font-size: 24px; font-weight: bold">
-          🌍智能旅行助手
-        </div>
-      </a-layout-header>
-      <a-layout-content style="padding: 24px">
-        <router-view />
-      </a-layout-content>
-      <a-layout-footer style="text-align: center">
-        智能旅行助手 ©2025 基于Langgraph框架
-      </a-layout-footer>
-    </a-layout>
-  </div>
+  <router-view />
 </template>
 
 <script setup lang="ts">
 </script>
 
 <style>
+:root {
+  color: #0f2342;
+  background: #f5fbff;
+  font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
 #app {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
-    'Noto Sans', sans-serif;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #f5fbff;
+}
+
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
 }
 </style>
-

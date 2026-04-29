@@ -31,6 +31,7 @@ from app.agents.graph_nodes import (  # noqa: E402
     sop_bootstrap_node,
 )
 from app.agents.tools import get_capability_tool  # noqa: E402
+from app.services.amap_service import _extract_poi_list  # noqa: E402
 from app.models.schemas import TripPlan, TripRequest  # noqa: E402
 
 
@@ -121,6 +122,26 @@ class MultiKeywordAmapService(FakeAmapService):
 class RawFailureAmapService(FakeAmapService):
     def search_poi_with_raw(self, keyword: str, _city: str, citylimit: bool = True):
         return [], f"raw failure for {keyword}: MCP disconnected"
+
+
+class HotelKeywordAmapService(FakeAmapService):
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def search_poi_with_raw(self, keyword: str, _city: str, citylimit: bool = True):
+        self.queries.append(keyword)
+        if keyword != "商务酒店":
+            return [], f"raw empty for {keyword}"
+        return [
+            {
+                "id": "hotel-business-1",
+                "name": "商务酒店",
+                "address": "测试路 2 号",
+                "location": {"longitude": 121.47, "latitude": 31.23},
+                "type": "酒店",
+                "rating": "4.6",
+            }
+        ], None
 
 
 class InfoGatheringPhase1Tests(unittest.TestCase):
@@ -246,6 +267,29 @@ class InfoGatheringPhase1Tests(unittest.TestCase):
         self.assertEqual(trip_plan.days[0].attractions[0].visit_duration, 90)
         self.assertEqual(trip_plan.days[0].attractions[0].location.longitude, 121.49)
 
+    def test_normalize_trip_plan_payload_prefers_tool_weather(self):
+        request = self.build_request()
+        raw_plan = {
+            "days": [],
+            "weather_info": [{"date": request.start_date, "day_weather": "多云"}],
+        }
+        tool_weather = [
+            {
+                "date": request.start_date,
+                "day_weather": "雷阵雨",
+                "night_weather": "雷阵雨",
+                "day_temp": 28,
+                "night_temp": 19,
+                "wind_direction": "北",
+                "wind_power": "1-3",
+            }
+        ]
+        normalized = normalize_trip_plan_payload(raw_plan, request, tool_weather)
+        trip_plan = TripPlan(**normalized)
+        self.assertEqual(trip_plan.weather_info[0].day_weather, "雷阵雨")
+        self.assertEqual(trip_plan.weather_info[0].day_temp, 28)
+        self.assertEqual(trip_plan.weather_info[0].night_temp, 19)
+
     def test_router_warning_blocks_early_submit_with_specific_reason(self):
         state = self.base_state()
         state["agent_output"] = {
@@ -351,6 +395,46 @@ class InfoGatheringPhase1Tests(unittest.TestCase):
         self.assertEqual(result["items"], [])
         self.assertIn("raw failure", result["warning"])
         self.assertIn("MCP disconnected", result["warning"])
+
+    @patch("app.agents.tools.attractions_tool.get_amap_service", return_value=RawFailureAmapService())
+    def test_search_attractions_normalizes_shopping_keyword(self, _amap):
+        result = get_capability_tool("search_attractions_tool").invoke(
+            {"city": "深圳", "keywords": ["购物"]}
+        )
+        search_keywords = result["meta"]["search_keywords"]
+        self.assertNotIn("购物", search_keywords)
+        self.assertIn("商业中心", search_keywords)
+        self.assertIn("购物中心", search_keywords)
+
+    @patch("app.agents.tools.hotels_tool.get_amap_service")
+    def test_search_hotels_normalizes_comfort_preference(self, _amap):
+        service = HotelKeywordAmapService()
+        _amap.return_value = service
+        result = get_capability_tool("search_hotels_tool").invoke(
+            {"city": "深圳", "accommodation": "舒适型酒店"}
+        )
+        search_keywords = result["meta"]["search_keywords"]
+        self.assertNotIn("舒适型酒店", search_keywords)
+        self.assertIn("酒店", search_keywords)
+        self.assertIn("宾馆", search_keywords)
+        self.assertIn("商务酒店", search_keywords)
+        self.assertEqual(len(result["items"]), 1)
+
+    def test_extract_poi_list_keeps_raw_pois_without_location(self):
+        payload = {
+            "suggestion": {"keywords": [], "cities": []},
+            "pois": [
+                {
+                    "id": "B02F306L5G",
+                    "name": "莲花山公园",
+                    "address": "深圳市福田区",
+                }
+            ],
+        }
+        pois = _extract_poi_list(payload)
+        self.assertEqual(len(pois), 1)
+        self.assertEqual(pois[0].name, "莲花山公园")
+        self.assertEqual(pois[0].location.longitude, 0.0)
 
     @patch("app.agents.tools.attractions_tool.get_amap_service", return_value=FakeAmapService())
     @patch("app.agents.tools.weather_tool.get_amap_service", return_value=FakeAmapService())
