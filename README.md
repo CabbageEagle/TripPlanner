@@ -1,4 +1,4 @@
-# HelloAgents Trip Planner
+# Trip Planner
 
 智能旅行规划系统。当前主链路基于 LangGraph 编排，结合高德地图服务、LLM、RAG 记忆、规则排程和校验修复闭环，生成可展示、可编辑、可保存的多日行程。
 
