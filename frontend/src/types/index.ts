@@ -112,6 +112,21 @@ export interface TripPlan {
   warnings?: string[]
 }
 
+export interface AgentDiagnostics {
+  sop_required?: Record<string, boolean>
+  sop_completed?: Record<string, boolean>
+  tool_calls?: Array<Record<string, any>>
+  tool_failures?: Array<Record<string, any>>
+  router_warning?: string | null
+  forced_exit?: boolean
+  force_exit_reason?: string | null
+  candidate_filter_notes?: string[]
+  transit_filtered_candidates?: Array<Record<string, any>>
+  local_events?: Record<string, any>
+  context_summary?: string
+  ready_for_planning?: boolean
+}
+
 export interface TripFormData {
   city: string
   start_date: string
@@ -135,11 +150,11 @@ export interface TripPlanResponse {
   message: string
   plan_id?: string
   data?: TripPlan
+  agent_diagnostics?: AgentDiagnostics
 }
 
 export interface TripPlanUpdateRequest {
   data: TripPlan
   note?: string
 }
-
 

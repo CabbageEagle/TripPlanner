@@ -59,6 +59,27 @@ class AmapService:
             print(f"[AMAP] POI 搜索失败: {exc}")
             return []
 
+    def search_poi_with_raw(self, keywords: str, city: str, citylimit: bool = True) -> tuple[list[POIInfo], str | None]:
+        try:
+            result = self.mcp_tool.run(
+                {
+                    "action": "call_tool",
+                    "tool_name": "maps_text_search",
+                    "arguments": {"keywords": keywords, "city": city, "citylimit": str(citylimit).lower()},
+                }
+            )
+            raw_text = str(result)
+            payload = _normalize_mcp_result(result)
+            pois = _extract_poi_list(payload)
+            if pois:
+                return pois, None
+            if payload:
+                return [], f"AMap returned no POIs for keyword '{keywords}'. Raw result: {_truncate_raw_result(raw_text)}"
+            return [], f"AMap MCP returned unparseable result for keyword '{keywords}': {_truncate_raw_result(raw_text)}"
+        except Exception as exc:
+            print(f"[AMAP] POI search failed: {exc}")
+            return [], f"AMap POI search failed for keyword '{keywords}': {exc}"
+
     def get_weather(self, city: str) -> list[WeatherInfo]:
         try:
             result = self.mcp_tool.run(
@@ -196,6 +217,13 @@ def _normalize_mcp_result(result: Any) -> dict[str, Any]:
         except Exception:
             pass
     return {}
+
+
+def _truncate_raw_result(raw_text: str, limit: int = 500) -> str:
+    text = " ".join(str(raw_text or "").split())
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}..."
 
 
 def _extract_poi_list(payload: dict[str, Any]) -> list[POIInfo]:

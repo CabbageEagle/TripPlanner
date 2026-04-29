@@ -70,29 +70,71 @@ def _render_attractions_text(city: str, items: list[dict[str, Any]], warning: st
     return "\n".join(lines)
 
 
+def _build_search_keywords(city: str, keywords: list[str] | None) -> list[str]:
+    raw_keywords = [str(item).strip() for item in (keywords or []) if str(item).strip()]
+    mapped: list[str] = []
+    for keyword in raw_keywords:
+        mapped.append(keyword)
+        if any(term in keyword for term in ("历史", "文化", "博物馆", "古迹")):
+            mapped.extend(["博物馆", "故宫", "历史文化景点"])
+        if any(term in keyword for term in ("自然", "风光", "公园", "山水")):
+            mapped.extend(["公园", "自然风景区"])
+        if any(term in keyword for term in ("休闲", "漫步", "城市")):
+            mapped.extend(["城市公园", "步行街"])
+
+    mapped.extend(["热门景点", f"{city} 景点"])
+    result: list[str] = []
+    seen: set[str] = set()
+    for keyword in mapped:
+        if not keyword or keyword in seen:
+            continue
+        seen.add(keyword)
+        result.append(keyword)
+        if len(result) >= 5:
+            break
+    return result
+
+
+def _search_poi_with_warning(service: Any, keyword: str, city: str) -> tuple[list[Any], str | None]:
+    if hasattr(service, "search_poi_with_raw"):
+        return service.search_poi_with_raw(keyword, city, citylimit=True)
+    return service.search_poi(keyword, city, citylimit=True), None
+
+
 @tool("search_attractions_tool", args_schema=SearchAttractionsInput)
 def search_attractions_tool(city: str, keywords: list[str] | None = None) -> dict[str, Any]:
     """Use this tool to query real attraction candidates for the target city. Use real service data only; do not invent attractions when the service returns no items."""
 
-    keyword = " ".join(keywords or []) or "热门景点"
+    search_keywords = _build_search_keywords(city, keywords)
     warning = None
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    warnings: list[str] = []
     try:
         service = get_amap_service()
-        pois = service.search_poi(keyword, city, citylimit=True)
-        items = [
-            normalized
-            for normalized in (
-                _normalize_attraction_item(_model_to_dict(item), city)
-                for item in pois
-            )
-            if normalized is not None
-        ][:10]
+        for keyword in search_keywords:
+            pois, query_warning = _search_poi_with_warning(service, keyword, city)
+            if query_warning:
+                warnings.append(query_warning)
+            for poi in pois:
+                normalized = _normalize_attraction_item(_model_to_dict(poi), city)
+                if normalized is None:
+                    continue
+                dedupe_key = str(normalized.get("poi_id") or normalized.get("name") or "")
+                if not dedupe_key or dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                items.append(normalized)
+                if len(items) >= 10:
+                    break
+            if len(items) >= 10:
+                break
     except Exception as exc:
         items = []
         warning = f"AMap attraction search failed: {exc}"
 
     if not items and warning is None:
-        warning = "AMap returned no attraction candidates."
+        warning = " | ".join(warnings) if warnings else "AMap returned no attraction candidates."
 
     return {
         "text": _render_attractions_text(city, items, warning),
@@ -101,5 +143,6 @@ def search_attractions_tool(city: str, keywords: list[str] | None = None) -> dic
         "meta": {
             "source": "amap",
             "keywords": keywords or [],
+            "search_keywords": search_keywords,
         },
     }

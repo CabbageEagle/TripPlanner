@@ -1,6 +1,6 @@
 ﻿"""旅行规划相关的数据模型定义。"""
 
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -196,6 +196,7 @@ class TripPlanResponse(BaseModel):
     message: str = Field(default="", description="返回消息")
     plan_id: Optional[str] = Field(default=None, description="已保存的行程 ID")
     data: Optional[TripPlan] = Field(default=None, description="旅行计划数据")
+    agent_diagnostics: Optional[Dict[str, Any]] = Field(default=None, description="Agent 信息收集诊断快照")
 
 
 class TripPlanUpdateRequest(BaseModel):

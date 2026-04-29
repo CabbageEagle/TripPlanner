@@ -52,6 +52,9 @@
             <a-menu-item key="conflicts" v-if="(tripPlan.time_conflicts && tripPlan.time_conflicts.length > 0) || (tripPlan.warnings && tripPlan.warnings.length > 0)">
               <span>⚠️ 风险提醒</span>
             </a-menu-item>
+            <a-menu-item key="agent-diagnostics" v-if="agentDiagnostics">
+              <span>🧭 Agent诊断</span>
+            </a-menu-item>
             <a-menu-item key="map">
               <span>📍 景点地图</span>
             </a-menu-item>
@@ -140,6 +143,155 @@
             </a-card>
           </div>
         </div>
+
+        <a-card
+          id="agent-diagnostics"
+          v-if="agentDiagnostics"
+          title="🧭 Agent Diagnostics"
+          :bordered="false"
+          class="diagnostics-card"
+        >
+          <div class="diagnostics-summary">
+            <a-tag :color="agentDiagnostics.ready_for_planning ? 'green' : 'orange'">
+              {{ agentDiagnostics.ready_for_planning ? '已满足规划前置条件' : '规划前置条件未完全满足' }}
+            </a-tag>
+            <a-tag :color="agentDiagnostics.router_warning ? 'orange' : 'green'">
+              {{ agentDiagnostics.router_warning ? '发生 router_warning' : '无 router_warning' }}
+            </a-tag>
+            <a-tag :color="agentDiagnostics.forced_exit ? 'red' : 'green'">
+              {{ agentDiagnostics.forced_exit ? '发生 forced_exit' : '无 forced_exit' }}
+            </a-tag>
+          </div>
+
+          <a-alert
+            v-if="agentDiagnostics.context_summary"
+            type="info"
+            show-icon
+            :message="agentDiagnostics.context_summary"
+            style="margin-bottom: 16px"
+          />
+
+          <a-descriptions title="SOP 必查项" :column="2" size="small" bordered class="diagnostics-section">
+            <a-descriptions-item
+              v-for="item in sopDiagnostics"
+              :key="item.key"
+              :label="item.label"
+            >
+              <a-tag :color="item.required ? 'blue' : 'default'">
+                {{ item.required ? '必查' : '非必查' }}
+              </a-tag>
+              <a-tag :color="item.completed ? 'green' : 'orange'">
+                {{ item.completed ? '已完成' : '未完成' }}
+              </a-tag>
+            </a-descriptions-item>
+          </a-descriptions>
+
+          <a-divider orientation="left">工具调用</a-divider>
+          <a-list
+            v-if="agentDiagnostics.tool_calls && agentDiagnostics.tool_calls.length > 0"
+            :data-source="agentDiagnostics.tool_calls"
+            size="small"
+            bordered
+          >
+            <template #renderItem="{ item, index }">
+              <a-list-item>
+                <a-space direction="vertical" size="small" style="width: 100%">
+                  <a-space wrap>
+                    <a-tag color="blue">#{{ index + 1 }}</a-tag>
+                    <strong>{{ getToolLabel(item.tool_name) }}</strong>
+                    <a-tag :color="item.success ? 'green' : 'red'">
+                      {{ item.success ? '成功' : '失败 / fallback' }}
+                    </a-tag>
+                    <a-tag>结果 {{ item.result_count || 0 }} 条</a-tag>
+                  </a-space>
+                  <span v-if="item.reason"><strong>调用原因:</strong> {{ truncateText(item.reason, 180) }}</span>
+                  <span v-if="item.summary"><strong>结果摘要:</strong> {{ truncateText(item.summary) }}</span>
+                  <a-alert
+                    v-if="item.warning"
+                    type="warning"
+                    show-icon
+                    :message="truncateText(item.warning, 180)"
+                  />
+                </a-space>
+              </a-list-item>
+            </template>
+          </a-list>
+          <a-empty v-else description="本次没有工具调用记录" />
+
+          <a-divider orientation="left">异常与候选过滤</a-divider>
+          <a-alert
+            v-if="agentDiagnostics.router_warning"
+            type="warning"
+            show-icon
+            :message="agentDiagnostics.router_warning"
+            style="margin-bottom: 10px"
+          />
+          <a-alert
+            v-if="agentDiagnostics.forced_exit"
+            type="error"
+            show-icon
+            :message="agentDiagnostics.force_exit_reason || '信息收集被强制退出'"
+            style="margin-bottom: 10px"
+          />
+          <a-list
+            v-if="agentDiagnostics.candidate_filter_notes && agentDiagnostics.candidate_filter_notes.length > 0"
+            :data-source="agentDiagnostics.candidate_filter_notes"
+            size="small"
+            bordered
+            class="diagnostics-section"
+          >
+            <template #renderItem="{ item }">
+              <a-list-item>{{ item }}</a-list-item>
+            </template>
+          </a-list>
+          <a-empty v-else description="没有交通时间过滤候选" />
+          <a-list
+            v-if="agentDiagnostics.transit_filtered_candidates && agentDiagnostics.transit_filtered_candidates.length > 0"
+            :data-source="agentDiagnostics.transit_filtered_candidates"
+            size="small"
+            bordered
+            class="diagnostics-section"
+          >
+            <template #renderItem="{ item }">
+              <a-list-item>
+                <a-space direction="vertical" size="small">
+                  <span>
+                    <strong>{{ item.destination_name || '未知候选' }}</strong>
+                    被交通时间过滤
+                  </span>
+                  <span>
+                    {{ item.origin_name || '未知起点' }} -> {{ item.destination_name || '未知终点' }}，
+                    {{ item.duration_minutes || 0 }} 分钟
+                  </span>
+                  <span v-if="item.reason">{{ item.reason }}</span>
+                </a-space>
+              </a-list-item>
+            </template>
+          </a-list>
+
+          <a-divider orientation="left">Local Events 触发判断</a-divider>
+          <a-descriptions :column="1" size="small" bordered>
+            <a-descriptions-item label="状态">
+              <a-tag :color="agentDiagnostics.local_events?.status === 'triggered' ? 'green' : 'default'">
+                {{ getLocalEventsStatus(agentDiagnostics.local_events?.status) }}
+              </a-tag>
+            </a-descriptions-item>
+            <a-descriptions-item label="原因">
+              {{ getLocalEventsReason(agentDiagnostics.local_events?.reason) }}
+            </a-descriptions-item>
+            <a-descriptions-item label="信号">
+              兴趣: {{ agentDiagnostics.local_events?.interest_signal ? '是' : '否' }}；
+              慢节奏: {{ agentDiagnostics.local_events?.slow_pace_signal ? '是' : '否' }}；
+              候选不足: {{ agentDiagnostics.local_events?.candidate_gap ? '是' : '否' }}
+            </a-descriptions-item>
+            <a-descriptions-item label="兴趣关键词">
+              {{ (agentDiagnostics.local_events?.interest_keywords || []).join('、') || '无' }}
+            </a-descriptions-item>
+            <a-descriptions-item label="活动候选数">
+              {{ agentDiagnostics.local_events?.items_count || 0 }}
+            </a-descriptions-item>
+          </a-descriptions>
+        </a-card>
 
         <a-card
           id="conflicts"
@@ -398,32 +550,38 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { computed, ref, onMounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { DownOutlined } from '@ant-design/icons-vue'
 import AMapLoader from '@amap/amap-jsapi-loader'
-import html2canvas from 'html2canvas'
-import jsPDF from 'jspdf'
 import { API_BASE_URL, getTripPlan, updateTripPlan } from '@/services/api'
-import type { TripPlan } from '@/types'
+import type { AgentDiagnostics, TripPlan } from '@/types'
 
 const TRIP_PLAN_STORAGE_KEY = 'tripPlan'
 const TRIP_PLAN_ID_STORAGE_KEY = 'tripPlanId'
+const AGENT_DIAGNOSTICS_STORAGE_KEY = 'agentDiagnostics'
 
 const router = useRouter()
 const route = useRoute()
 const tripPlan = ref<TripPlan | null>(null)
+const agentDiagnostics = ref<AgentDiagnostics | null>(null)
 const currentPlanId = ref<string | null>(null)
 const editMode = ref(false)
 const originalPlan = ref<TripPlan | null>(null)
 const attractionPhotos = ref<Record<string, string>>({})
+const placeholderImages = new Map<string, string>()
 const activeSection = ref('overview')
 const activeDays = ref<number[]>([0])
 let map: any = null
 
-const persistTripPlanCache = (plan: TripPlan, planId?: string | null) => {
+const persistTripPlanCache = (plan: TripPlan, planId?: string | null, diagnostics?: AgentDiagnostics | null) => {
   sessionStorage.setItem(TRIP_PLAN_STORAGE_KEY, JSON.stringify(plan))
+  if (diagnostics) {
+    sessionStorage.setItem(AGENT_DIAGNOSTICS_STORAGE_KEY, JSON.stringify(diagnostics))
+  } else if (diagnostics === null) {
+    sessionStorage.removeItem(AGENT_DIAGNOSTICS_STORAGE_KEY)
+  }
   if (planId) {
     sessionStorage.setItem(TRIP_PLAN_ID_STORAGE_KEY, planId)
   }
@@ -444,9 +602,77 @@ const rebuildMap = () => {
   })
 }
 
+const sopLabels: Record<string, string> = {
+  attractions_required: '景点信息',
+  weather_required: '天气信息',
+  hotels_required: '酒店信息',
+  transit_required: '交通测算',
+  local_events_optional: '本地活动增强'
+}
+
+const completedKeyByRequiredKey: Record<string, string> = {
+  attractions_required: 'attractions_done',
+  weather_required: 'weather_done',
+  hotels_required: 'hotels_done',
+  transit_required: 'transit_done'
+}
+
+const sopDiagnostics = computed(() => {
+  const required = agentDiagnostics.value?.sop_required || {}
+  const completed = agentDiagnostics.value?.sop_completed || {}
+  return Object.entries(sopLabels).map(([key, label]) => {
+    const completedKey = completedKeyByRequiredKey[key]
+    return {
+      key,
+      label,
+      required: Boolean(required[key]),
+      completed: completedKey ? Boolean(completed[completedKey]) : Boolean(required[key])
+    }
+  })
+})
+
+const getToolLabel = (toolName: string): string => {
+  const labels: Record<string, string> = {
+    search_attractions_tool: '搜索景点',
+    query_weather_tool: '查询天气',
+    search_hotels_tool: '搜索酒店',
+    search_local_events_tool: '搜索本地活动',
+    estimate_transit_time_tool: '估算交通时间'
+  }
+  return labels[toolName] || toolName || '未知工具'
+}
+
+const truncateText = (value: unknown, maxLength = 240): string => {
+  const text = String(value || '').replace(/\s+/g, ' ').trim()
+  if (text.length <= maxLength) {
+    return text
+  }
+  return `${text.slice(0, maxLength)}...`
+}
+
+const getLocalEventsStatus = (status?: string): string => {
+  if (status === 'triggered') return '已触发'
+  if (status === 'not_triggered') return '未触发'
+  return '未知'
+}
+
+const getLocalEventsReason = (reason?: string): string => {
+  const labels: Record<string, string> = {
+    interest_match: '命中展览/演出/音乐/亲子等兴趣信号',
+    slow_pace: '命中轻松/慢游/少折腾等慢节奏信号',
+    candidate_gap: '基础景点候选不足，需要补充惊喜项',
+    existing_context: '已有本地活动上下文',
+    required_sop_first: '必查 SOP 尚未完成，先执行基础信息收集',
+    no_interest_or_pace_signal: '未命中特定兴趣、慢节奏或候选不足信号',
+    not_reached_before_planning: '进入规划前未轮到可选增强工具'
+  }
+  return labels[reason || ''] || reason || '无'
+}
+
 const loadPersistedTripPlan = async () => {
   const planId = resolvePlanId()
   const cachedPlan = sessionStorage.getItem(TRIP_PLAN_STORAGE_KEY)
+  const cachedDiagnostics = sessionStorage.getItem(AGENT_DIAGNOSTICS_STORAGE_KEY)
 
   if (planId) {
     currentPlanId.value = planId
@@ -454,7 +680,8 @@ const loadPersistedTripPlan = async () => {
       const response = await getTripPlan(planId)
       if (response.success && response.data) {
         tripPlan.value = response.data
-        persistTripPlanCache(response.data, response.plan_id || planId)
+        agentDiagnostics.value = response.agent_diagnostics || null
+        persistTripPlanCache(response.data, response.plan_id || planId, response.agent_diagnostics || null)
         return
       }
       throw new Error(response.message || '获取旅行计划失败')
@@ -469,15 +696,18 @@ const loadPersistedTripPlan = async () => {
   if (cachedPlan) {
     tripPlan.value = JSON.parse(cachedPlan)
     currentPlanId.value = planId
+    if (cachedDiagnostics) {
+      agentDiagnostics.value = JSON.parse(cachedDiagnostics)
+    }
   }
 }
 
 onMounted(async () => {
   await loadPersistedTripPlan()
   if (tripPlan.value) {
-    await loadAttractionPhotos()
     await nextTick()
     initMap()
+    void loadAttractionPhotos()
   }
 })
 
@@ -509,9 +739,10 @@ const saveChanges = async () => {
         throw new Error(response.message || '保存旅行计划失败')
       }
       tripPlan.value = response.data
-      persistTripPlanCache(response.data, response.plan_id || currentPlanId.value)
+      agentDiagnostics.value = response.agent_diagnostics || agentDiagnostics.value
+      persistTripPlanCache(response.data, response.plan_id || currentPlanId.value, agentDiagnostics.value)
     } else {
-      persistTripPlanCache(tripPlan.value)
+      persistTripPlanCache(tripPlan.value, null, agentDiagnostics.value)
     }
 
     editMode.value = false
@@ -583,31 +814,40 @@ const loadAttractionPhotos = async () => {
   if (!tripPlan.value) return
 
   attractionPhotos.value = {}
-  const promises: Promise<void>[] = []
+  const names = Array.from(
+    new Set(
+      tripPlan.value.days.flatMap(day => day.attractions.map(attraction => attraction.name).filter(Boolean))
+    )
+  )
 
-  tripPlan.value.days.forEach(day => {
-    day.attractions.forEach(attraction => {
-      const promise = fetch(`${API_BASE_URL}/api/poi/photo?name=${encodeURIComponent(attraction.name)}`)
+  const batchSize = 4
+  for (let index = 0; index < names.length; index += batchSize) {
+    const batch = names.slice(index, index + batchSize)
+    await Promise.all(
+      batch.map(name =>
+        fetch(`${API_BASE_URL}/api/poi/photo?name=${encodeURIComponent(name)}`)
         .then(res => res.json())
         .then(data => {
           if (data.success && data.data.photo_url) {
-            attractionPhotos.value[attraction.name] = data.data.photo_url
+            attractionPhotos.value[name] = data.data.photo_url
           }
         })
         .catch(err => {
-          console.error(`获取${attraction.name}图片失败:`, err)
+          console.error(`获取${name}图片失败:`, err)
         })
-
-      promises.push(promise)
-    })
-  })
-
-  await Promise.all(promises)
+      )
+    )
+  }
 }
 
 const getAttractionImage = (name: string, index: number): string => {
   if (attractionPhotos.value[name]) {
     return attractionPhotos.value[name]
+  }
+  const cacheKey = `${name}-${index}`
+  const cached = placeholderImages.get(cacheKey)
+  if (cached) {
+    return cached
   }
 
   const colors = [
@@ -631,7 +871,9 @@ const getAttractionImage = (name: string, index: number): string => {
     <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="sans-serif" font-size="24" font-weight="bold" fill="white">${name}</text>
   </svg>`
 
-  return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`
+  const dataUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`
+  placeholderImages.set(cacheKey, dataUrl)
+  return dataUrl
 }
 
 const handleImageError = (event: Event) => {
@@ -642,6 +884,7 @@ const handleImageError = (event: Event) => {
 const exportAsImage = async () => {
   try {
     message.loading({ content: '正在生成图片...', key: 'export', duration: 0 })
+    const { default: html2canvas } = await import('html2canvas')
 
     const element = document.querySelector('.main-content') as HTMLElement
     if (!element) {
@@ -764,6 +1007,10 @@ const exportAsImage = async () => {
 const exportAsPDF = async () => {
   try {
     message.loading({ content: '正在生成PDF...', key: 'export', duration: 0 })
+    const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
+      import('html2canvas'),
+      import('jspdf')
+    ])
 
     const element = document.querySelector('.main-content') as HTMLElement
     if (!element) {
@@ -1173,6 +1420,21 @@ const drawRoutes = (AMap: any, attractions: any[]) => {
   text-align: center;
   color: #00796b;
   font-size: 14px;
+}
+
+.diagnostics-card {
+  margin-bottom: 20px;
+}
+
+.diagnostics-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.diagnostics-section {
+  margin-bottom: 16px;
 }
 
 /* 回到顶部按钮 */

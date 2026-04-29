@@ -6,6 +6,7 @@ from langgraph.graph import StateGraph, END
 from .graph_state import TripPlannerState
 from .graph_nodes import (
     init_info_gathering_node,
+    sop_bootstrap_node,
     info_gathering_agent_node,
     search_attractions_node,
     query_weather_node,
@@ -21,6 +22,8 @@ from .graph_nodes import (
     verify_plan_node,
     fix_plan_node,
     error_handler_node,
+    build_agent_diagnostics,
+    normalize_trip_plan_payload,
     info_gathering_router,
     should_retry_parse,
     should_fix_or_end
@@ -41,6 +44,7 @@ class LangGraphTripPlanner:
         
         # 添加节点
         workflow.add_node("init_info_gathering", init_info_gathering_node)
+        workflow.add_node("sop_bootstrap", sop_bootstrap_node)
         workflow.add_node("info_gathering_agent", info_gathering_agent_node)
         workflow.add_node("search_attractions_tool", search_attractions_node)
         workflow.add_node("query_weather_tool", query_weather_node)
@@ -61,7 +65,8 @@ class LangGraphTripPlanner:
         workflow.set_entry_point("init_info_gathering")
 
         # 信息搜集子图
-        workflow.add_edge("init_info_gathering", "info_gathering_agent")
+        workflow.add_edge("init_info_gathering", "sop_bootstrap")
+        workflow.add_edge("sop_bootstrap", "info_gathering_agent")
         workflow.add_conditional_edges(
             "info_gathering_agent",
             info_gathering_router,
@@ -125,14 +130,23 @@ class LangGraphTripPlanner:
         print("   流程: 数据收集 -> 规划 -> 解析 -> 校验 -> [修复回环] -> 结束")
     
     def plan_trip(self, request: TripRequest, inferred_preferences: str | None = None) -> TripPlan:
+        """使用 LangGraph 生成旅行计划。"""
+        trip_plan, _diagnostics = self.plan_trip_with_diagnostics(request, inferred_preferences)
+        return trip_plan
+
+    def plan_trip_with_diagnostics(
+        self,
+        request: TripRequest,
+        inferred_preferences: str | None = None,
+    ) -> tuple[TripPlan, dict[str, Any]]:
         """
-        使用 LangGraph 生成旅行计划
+        使用 LangGraph 生成旅行计划，并返回 Agent 诊断快照。
         
         Args:
             request: 旅行请求
             
         Returns:
-            旅行计划
+            旅行计划和诊断信息
         """
         try:
             print(f"\n{'='*60}")
@@ -173,6 +187,7 @@ class LangGraphTripPlanner:
                     "transit_evidence": [],
                 },
                 "context_summary": "",
+                "last_tool_result": None,
                 "tool_call_history": [],
                 "candidate_filter_notes": [],
                 "agent_output": None,
@@ -197,7 +212,7 @@ class LangGraphTripPlanner:
             
             # 运行工作流
             final_state = self.app.invoke(initial_state)
-            
+            loop_count = final_state.get("loop_count", 0)
             # 获取最终计划（已经是结构化数据）
             final_plan_dict = final_state.get("final_plan")
             
@@ -208,6 +223,7 @@ class LangGraphTripPlanner:
             else:
                 # 直接转换为 TripPlan 对象
                 try:
+                    final_plan_dict = normalize_trip_plan_payload(final_plan_dict, request)
                     trip_plan = TripPlan(**final_plan_dict)
                 except Exception as e:
                     print(f"[LANGGRAPH] 转换为 TripPlan 失败: {str(e)}")
@@ -216,16 +232,19 @@ class LangGraphTripPlanner:
             # 打印验证统计
             verify_count = final_state.get("verify_count", 0)
             violations = final_state.get("violations")
+
             print(f"\n{'='*60}")
             print("[LANGGRAPH] 旅行计划生成完成")
             print(f"   验证次数: {verify_count}")
+            print(f"[LANGGRAPH] info_gathering loop_count: {loop_count}")
+                  
             if violations:
                 print(f"   [WARN] 存在 {len(violations)} 个未解决的问题")
             else:
                 print("   [OK] 所有验证通过")
             print(f"{'='*60}\n")
             
-            return trip_plan
+            return trip_plan, build_agent_diagnostics(final_state)
             
         except Exception as e:
             print(f"[LANGGRAPH] 生成旅行计划失败: {str(e)}")
@@ -263,7 +282,7 @@ class LangGraphTripPlanner:
                 raise ValueError("响应中未找到JSON数据")
             
             # 解析JSON
-            data = json.loads(json_str)
+            data = normalize_trip_plan_payload(json.loads(json_str), request)
             
             # 转换为TripPlan对象
             trip_plan = TripPlan(**data)

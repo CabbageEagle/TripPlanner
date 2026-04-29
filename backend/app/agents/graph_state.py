@@ -63,9 +63,23 @@ class ToolCallRecord(TypedDict, total=False):
     tool_name: AllowedInfoToolName
     tool_input: dict[str, Any]
     success: bool
+    reason: str
     summary: str
     result_count: int
     warning: str
+
+
+class ToolResult(TypedDict, total=False):
+    """Unified graph-level tool result passed from executor nodes to merge."""
+
+    tool_name: AllowedInfoToolName
+    tool_input: dict[str, Any]
+    success: bool
+    reason: str
+    text: str
+    items: list[dict[str, Any]]
+    warning: str | None
+    meta: dict[str, Any]
 
 
 class ChecklistUpdate(TypedDict):
@@ -107,6 +121,7 @@ class TripPlannerState(TypedDict, total=False):
     sop_completed: SOPCompletedState
     gathered_context: GatheredContextState
     context_summary: str
+    last_tool_result: ToolResult | None
     tool_call_history: list[ToolCallRecord]
     candidate_filter_notes: list[str]
     agent_output: InfoGatheringAgentOutput | None

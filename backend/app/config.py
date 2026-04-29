@@ -43,7 +43,7 @@ class Settings(BaseSettings):
 
     llm_api_key: str = ""
     llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    llm_model: str = "qwen3.5-plus"
+    llm_model: str =os.getenv("LLM_MODEL_ID")
     # Dedicated model for judge/eval (separate from generation model).
     judge_model: str = "glm-4.7"
     llm_embedding_model: str = "text-embedding-3-small"

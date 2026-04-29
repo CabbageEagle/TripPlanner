@@ -18,7 +18,7 @@ BACKEND_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.agents import graph_nodes as graph_nodes_module  # noqa: E402
-from app.agents.graph_nodes import search_local_events_node  # noqa: E402
+from app.agents.graph_nodes import merge_tool_result_node, search_local_events_node  # noqa: E402
 from app.agents.graph_nodes import plan_trip_node  # noqa: E402
 from app.agents.tools import CAPABILITY_TOOLS, get_capability_tool  # noqa: E402
 from app.agents.tools.local_events_tool import (  # noqa: E402
@@ -95,6 +95,7 @@ class LocalEventsToolingTests(unittest.TestCase):
                 "transit_evidence": [],
             },
             "context_summary": "",
+            "last_tool_result": None,
             "tool_call_history": [],
             "candidate_filter_notes": [],
             "agent_output": None,
@@ -213,7 +214,8 @@ class LocalEventsToolingTests(unittest.TestCase):
             }
 
         with patch("app.agents.graph_nodes._get_capability_tool", return_value=SimpleNamespace(invoke=fake_invoke)):
-            result = search_local_events_node(state)
+            tool_result = search_local_events_node(state)
+            result = merge_tool_result_node({**state, **tool_result})
 
         payload = captured["payload"]
         self.assertIn("展览", payload["interest_keywords"])

@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Request
 from ..config import get_settings, validate_config, print_config
+from ..db.schema import ensure_runtime_schema
 from .routes import trip, poi, map as map_routes
 
 # 获取配置
@@ -62,6 +63,14 @@ async def startup_event():
     except ValueError as e:
         print(f"\n❌ 配置验证失败:\n{e}")
         print("\n请检查.env文件并确保所有必要的配置项都已设置")
+        raise
+
+    # Keep local/dev databases compatible with the current ORM model.
+    try:
+        ensure_runtime_schema()
+        print("\n✅ 数据库结构检查通过")
+    except Exception as e:
+        print(f"\n❌ 数据库结构检查失败: {e}")
         raise
     
     print("\n" + "="*60)

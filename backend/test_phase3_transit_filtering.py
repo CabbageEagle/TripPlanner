@@ -109,6 +109,7 @@ class TransitPhase3Tests(unittest.TestCase):
                 "transit_evidence": [],
             },
             "context_summary": "",
+            "last_tool_result": None,
             "tool_call_history": [],
             "candidate_filter_notes": [],
             "agent_output": None,
@@ -168,7 +169,8 @@ class TransitPhase3Tests(unittest.TestCase):
                 "conflict_reason": "No obvious schedule conflict was detected.",
             }
         ]
-        result = estimate_transit_time_node(state)
+        tool_result = estimate_transit_time_node(state)
+        result = merge_tool_result_node({**state, **tool_result})
         self.assertTrue(result["sop_completed"]["transit_done"])
         self.assertEqual(result["gathered_context"]["transit_evidence"][0]["decision"], "drop_candidate")
         self.assertTrue(result["candidate_filter_notes"])

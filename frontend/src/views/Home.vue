@@ -120,6 +120,7 @@
                   <a-select-option value="舒适型酒店">🏨 舒适型酒店</a-select-option>
                   <a-select-option value="豪华酒店">⭐ 豪华酒店</a-select-option>
                   <a-select-option value="民宿">🏡 民宿</a-select-option>
+                  <a-select-option value="不住宿（当天往返）">🌙 不住宿（当天往返）</a-select-option>
                 </a-select>
               </a-form-item>
             </a-col>
@@ -329,6 +330,7 @@ import type { Dayjs } from 'dayjs'
 
 const TRIP_PLAN_STORAGE_KEY = 'tripPlan'
 const TRIP_PLAN_ID_STORAGE_KEY = 'tripPlanId'
+const AGENT_DIAGNOSTICS_STORAGE_KEY = 'agentDiagnostics'
 
 interface HomeFormState {
   city: string
@@ -427,6 +429,11 @@ const handleSubmit = async () => {
 
     if (response.success && response.data) {
       sessionStorage.setItem(TRIP_PLAN_STORAGE_KEY, JSON.stringify(response.data))
+      if (response.agent_diagnostics) {
+        sessionStorage.setItem(AGENT_DIAGNOSTICS_STORAGE_KEY, JSON.stringify(response.agent_diagnostics))
+      } else {
+        sessionStorage.removeItem(AGENT_DIAGNOSTICS_STORAGE_KEY)
+      }
       if (response.plan_id) {
         sessionStorage.setItem(TRIP_PLAN_ID_STORAGE_KEY, response.plan_id)
       } else {

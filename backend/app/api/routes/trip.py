@@ -99,8 +99,13 @@ async def plan_trip(request: TripRequest, db: Session = Depends(get_db)):
             )
 
         agent = get_trip_planner_agent()
-        trip_plan = await asyncio.to_thread(agent.plan_trip, request, inferred_preferences)
+        trip_plan, agent_diagnostics = await asyncio.to_thread(
+            agent.plan_trip_with_diagnostics,
+            request,
+            inferred_preferences,
+        )
         plan_payload = trip_plan.model_dump()
+        plan_payload["agent_diagnostics"] = agent_diagnostics
         request_payload = request.model_dump()
 
         trip_record = create_trip_plan(
@@ -140,6 +145,7 @@ async def plan_trip(request: TripRequest, db: Session = Depends(get_db)):
             message="旅行计划生成成功",
             plan_id=str(trip_record.id),
             data=trip_plan,
+            agent_diagnostics=agent_diagnostics,
         )
 
     except Exception as e:
@@ -200,8 +206,13 @@ async def plan_trip_stream(request: TripRequest, db: Session = Depends(get_db)):
                 {"step": "planning", "percent": 45, "message": "正在生成旅行计划"},
             )
             agent = get_trip_planner_agent()
-            trip_plan = await asyncio.to_thread(agent.plan_trip, request, inferred_preferences)
+            trip_plan, agent_diagnostics = await asyncio.to_thread(
+                agent.plan_trip_with_diagnostics,
+                request,
+                inferred_preferences,
+            )
             plan_payload = trip_plan.model_dump()
+            plan_payload["agent_diagnostics"] = agent_diagnostics
             request_payload = request.model_dump()
 
             yield _sse(
@@ -245,6 +256,7 @@ async def plan_trip_stream(request: TripRequest, db: Session = Depends(get_db)):
                 message="旅行计划生成成功",
                 plan_id=str(trip_record.id),
                 data=trip_plan,
+                agent_diagnostics=agent_diagnostics,
             ).model_dump(mode="json")
             yield _sse(
                 "progress",
@@ -300,7 +312,8 @@ async def get_trip(plan_id: UUID, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="旅行计划不存在")
 
     try:
-        trip_plan = TripPlan(**trip_record.current_plan_payload)
+        current_payload = trip_record.current_plan_payload if isinstance(trip_record.current_plan_payload, dict) else {}
+        trip_plan = TripPlan(**current_payload)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"旅行计划数据损坏: {str(e)}")
 
@@ -309,6 +322,7 @@ async def get_trip(plan_id: UUID, db: Session = Depends(get_db)):
         message="旅行计划获取成功",
         plan_id=str(trip_record.id),
         data=trip_plan,
+        agent_diagnostics=current_payload.get("agent_diagnostics"),
     )
 
 
@@ -329,6 +343,8 @@ async def update_trip(plan_id: UUID, request: TripPlanUpdateRequest, db: Session
         previous_plan = TripPlan(**trip_record.current_plan_payload)
         updated_payload = request.data.model_dump()
         request_payload = trip_record.request_payload if isinstance(trip_record.request_payload, dict) else {}
+        existing_payload = trip_record.current_plan_payload if isinstance(trip_record.current_plan_payload, dict) else {}
+        existing_diagnostics = existing_payload.get("agent_diagnostics")
 
         transportation_pref = request_payload.get("transportation")
         if not transportation_pref and request.data.days:
@@ -360,6 +376,8 @@ async def update_trip(plan_id: UUID, request: TripPlanUpdateRequest, db: Session
             updated_payload["days"] = scheduled_days
         if schedule_warnings:
             print(f"[API] 编辑后自动重排完成，告警 {len(schedule_warnings)} 条", flush=True)
+        if existing_diagnostics is not None:
+            updated_payload["agent_diagnostics"] = existing_diagnostics
 
         save_new_trip_plan_version(
             db,
@@ -390,6 +408,7 @@ async def update_trip(plan_id: UUID, request: TripPlanUpdateRequest, db: Session
             message="旅行计划保存成功",
             plan_id=str(plan_id),
             data=TripPlan(**updated_payload),
+            agent_diagnostics=existing_diagnostics,
         )
     except HTTPException:
         db.rollback()
