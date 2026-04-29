@@ -1,0 +1,17 @@
+﻿.env
+.env.*
+!.env.example
+
+node_modules/
+dist/
+dist-ssr/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.uv-cache/
+.uv-tools/
+*.log
+.DS_Store
+Thumbs.db
