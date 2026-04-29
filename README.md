@@ -172,6 +172,4 @@ python -m unittest discover backend -p "test_*.py"
 ## 关键文档
 
 - `PROJECT_INTRODUCTION.md`：当前架构、pipeline、RAG、状态与能力封装说明。
-- `docs/项目架构与Agent开发Pipeline报告.md`：项目工程化报告。
-- `LANGGRAPH_MIGRATION.md`：早期 LangGraph 迁移说明。
 
